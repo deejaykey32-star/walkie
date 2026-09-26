@@ -64,6 +64,7 @@ export default function App() {
   const [backlightColor, setBacklightColor] = useState<'amber' | 'emerald' | 'cyan'>('amber');
   const [rogerBeepOn, setRogerBeepOn] = useState(true);
   const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [customChannelInput, setCustomChannelInput] = useState('');
   const [showGuide, setShowGuide] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
 
@@ -286,6 +287,32 @@ export default function App() {
           </div>
         </div>
 
+        {/* Prominent Channel Selection Bar */}
+        <div className="mb-2.5">
+          <button
+            onClick={() => setShowChannelPicker(true)}
+            className="w-full py-2.5 px-3.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-amber-500/10 to-amber-500/20 border-2 border-amber-500/50 hover:border-amber-400 active:scale-[0.98] transition flex items-center justify-between text-amber-300 shadow-md shadow-amber-950/30 group"
+          >
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-slate-950 transition">
+                <Radio className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-400/90 block">
+                  BIEŻĄCY KANAŁ:
+                </span>
+                <span className="text-xs font-black font-mono text-white tracking-wide">
+                  {currentChannelObj.name} ({channel})
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 text-[11px] font-extrabold text-slate-950 uppercase bg-amber-400 group-hover:bg-amber-300 px-2.5 py-1 rounded-xl shadow-sm transition">
+              <span>WYBIERZ</span>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </div>
+          </button>
+        </div>
+
         {/* Tactical LCD Display Screen */}
         <div className="mb-3">
           <RadioDisplay
@@ -303,6 +330,7 @@ export default function App() {
             callAlertIncoming={callAlertIncoming}
             backlightColor={backlightColor}
             onToggleBacklight={cycleBacklight}
+            onOpenChannelPicker={() => setShowChannelPicker(true)}
             isToggleMode={isToggleMode}
           />
         </div>
@@ -526,10 +554,13 @@ export default function App() {
 
       {/* Channel Picker Modal */}
       {showChannelPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100 flex flex-col max-h-[85vh]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100 flex flex-col max-h-[85vh] my-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="font-bold text-base text-white">Wybierz kanał częstotliwości</h3>
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-amber-400" />
+                <h3 className="font-bold text-base text-white">Wybierz kanał częstotliwości</h3>
+              </div>
               <button
                 onClick={() => setShowChannelPicker(false)}
                 className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
@@ -538,7 +569,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="my-3 space-y-2 overflow-y-auto pr-1">
+            <div className="my-3 space-y-2 overflow-y-auto pr-1 max-h-60">
               {channels.map((ch) => {
                 const isActive = ch.id === channel;
                 return (
@@ -550,7 +581,7 @@ export default function App() {
                     }}
                     className={`w-full flex items-center justify-between p-3 rounded-2xl border transition ${
                       isActive
-                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow-md shadow-amber-950/40'
                         : 'bg-slate-950/60 border-slate-800 text-slate-200 hover:bg-slate-800'
                     }`}
                   >
@@ -567,13 +598,41 @@ export default function App() {
                 );
               })}
             </div>
+
+            {/* Custom Channel Input inside Channel Picker Modal */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const clean = customChannelInput.trim();
+                if (clean) {
+                  changeChannel(clean.toUpperCase());
+                  setCustomChannelInput('');
+                  setShowChannelPicker(false);
+                }
+              }}
+              className="pt-3 border-t border-slate-800 flex gap-2"
+            >
+              <input
+                type="text"
+                value={customChannelInput}
+                onChange={(e) => setCustomChannelInput(e.target.value)}
+                placeholder="Wpisz własny kod (np. ALFA, 7721)..."
+                className="flex-1 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-xs font-mono text-amber-400 uppercase placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
+              />
+              <button
+                type="submit"
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold uppercase tracking-wider transition active:scale-95"
+              >
+                Ustaw
+              </button>
+            </form>
           </div>
         </div>
       )}
 
       {/* Edit Device Name Modal */}
       {isEditingName && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <form
             onSubmit={handleSaveName}
             className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100"
@@ -612,7 +671,7 @@ export default function App() {
 
       {/* Instruction Guide Modal */}
       {showGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl text-slate-100 space-y-4">
             <div className="flex items-center gap-2.5 pb-2 border-b border-slate-800">
               <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">

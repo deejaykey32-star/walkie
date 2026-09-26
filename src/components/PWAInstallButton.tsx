@@ -107,7 +107,7 @@ export const PWAInstallButton: React.FC = () => {
 
       {/* Direct Toast Hint Notification (No Frame Modal!) */}
       {toastMessage && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] rounded-2xl bg-slate-900/95 border border-amber-500/50 p-3.5 shadow-2xl backdrop-blur-md text-slate-100 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] rounded-2xl bg-slate-900/95 border border-amber-500/50 p-3.5 shadow-2xl backdrop-blur-md text-slate-100 flex items-center gap-3">
           <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
             <Info className="w-4 h-4" />
           </div>

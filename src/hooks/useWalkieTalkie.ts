@@ -64,6 +64,11 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     deviceNameRef.current = deviceName;
   }, [deviceName]);
 
+  const peerIdRef = useRef(peerId);
+  useEffect(() => {
+    peerIdRef.current = peerId;
+  }, [peerId]);
+
   const peerRef = useRef<Peer | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
   const mediaConnRef = useRef<MediaConnection | null>(null);
@@ -71,7 +76,15 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const isTransmittingRef = useRef(false);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
-  const roomWsRef = useRef<WebSocket | null>(null);
+  const roomPeerRef = useRef<Peer | null>(null);
+  const isRoomHostRef = useRef(false);
+  const roomMembersRef = useRef<Set<string>>(new Set());
+
+  // Helper to build deterministic room peer ID for channel auto-discovery
+  const getRoomPeerId = (channelName: string): string => {
+    const clean = channelName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return `WT-ROOM-${clean || 'CH01'}`;
+  };
 
   // Hidden audio element for WebRTC remote sound
   useEffect(() => {
@@ -219,7 +232,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
         const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
         switch (msg.type) {
           case 'peer-info':
-            // Verify remote peer is not self
             if (msg.peerId !== peerId) {
               setRemotePeer({
                 peerId: (msg.peerId as string) || conn.peer,
@@ -303,7 +315,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     });
   }, [peerId]);
 
-  // Connect directly to target remote peer ID (strictly preventing self-connection)
+  // Connect directly to target remote peer ID
   const connectToPeer = useCallback(async (targetPeerId: string) => {
     if (!peerRef.current || peerRef.current.destroyed) return;
     if (!targetPeerId || targetPeerId === peerId) {
@@ -327,7 +339,135 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     }
   }, [peerId, initMicrophone, setupDataConnection, setupMediaCall]);
 
-  // Setup BroadcastChannel for local cross-tab / local network pairing
+  // Connect to channel room beacon host
+  const connectToRoomHost = useCallback((roomId: string) => {
+    if (!peerRef.current || peerRef.current.destroyed) return;
+    if (isRoomHostRef.current) return;
+    console.log('[RoomBeacon] Connecting to room host:', roomId);
+
+    try {
+      const conn = peerRef.current.connect(roomId, {
+        metadata: { peerId: peerIdRef.current, name: deviceNameRef.current, channel: channelRef.current },
+      });
+
+      const sendJoin = () => {
+        try {
+          conn.send({
+            type: 'join-room',
+            peerId: peerIdRef.current,
+            name: deviceNameRef.current,
+            channel: channelRef.current,
+          });
+        } catch (e) {
+          console.warn('[RoomBeacon] Send join error:', e);
+        }
+      };
+
+      if (conn.open) {
+        sendJoin();
+      } else {
+        conn.on('open', sendJoin);
+      }
+
+      conn.on('data', (data: unknown) => {
+        try {
+          const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
+          if (msg.type === 'room-peers' && Array.isArray(msg.peers)) {
+            msg.peers.forEach((pId: unknown) => {
+              if (typeof pId === 'string' && pId !== peerIdRef.current) {
+                connectToPeer(pId);
+              }
+            });
+          }
+        } catch (e) {
+          console.warn('[RoomBeacon] Error parsing room host data:', e);
+        }
+      });
+
+      conn.on('error', (err) => {
+        console.warn('[RoomBeacon] Connection to room host error:', err);
+      });
+    } catch (err) {
+      console.warn('[RoomBeacon] connectToRoomHost exception:', err);
+    }
+  }, [connectToPeer]);
+
+  // Initialize Channel Room Beacon (claims room host or joins existing host)
+  const initRoomBeacon = useCallback((targetChannel: string) => {
+    if (roomPeerRef.current) {
+      try {
+        roomPeerRef.current.destroy();
+      } catch (e) {}
+      roomPeerRef.current = null;
+    }
+    isRoomHostRef.current = false;
+    roomMembersRef.current.clear();
+
+    const roomId = getRoomPeerId(targetChannel);
+    console.log('[RoomBeacon] Attempting to host room for channel:', targetChannel, 'with Room ID:', roomId);
+
+    try {
+      const roomPeer = new Peer(roomId, {
+        debug: 1,
+        config: STUN_SERVERS,
+      });
+      roomPeerRef.current = roomPeer;
+
+      roomPeer.on('open', (id) => {
+        console.log('[RoomBeacon] Successfully established Room Host for channel:', targetChannel, 'ID:', id);
+        isRoomHostRef.current = true;
+      });
+
+      roomPeer.on('connection', (conn) => {
+        conn.on('data', (data: unknown) => {
+          try {
+            const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
+            if (msg.type === 'join-room' && msg.peerId && typeof msg.peerId === 'string') {
+              const remoteId = msg.peerId;
+              if (remoteId === peerIdRef.current) return;
+
+              console.log('[RoomBeacon] Room Host received join request from peer:', remoteId);
+
+              connectToPeer(remoteId);
+
+              const activePeers = Array.from(roomMembersRef.current);
+              try {
+                conn.send({
+                  type: 'room-peers',
+                  peers: [peerIdRef.current, ...activePeers],
+                });
+              } catch (e) {}
+
+              roomMembersRef.current.add(remoteId);
+            }
+          } catch (e) {
+            console.warn('[RoomBeacon] Error parsing host conn data:', e);
+          }
+        });
+      });
+
+      roomPeer.on('error', (err: any) => {
+        if (err.type === 'unavailable-id') {
+          console.log('[RoomBeacon] Room Host already exists for channel:', targetChannel, '. Joining as client...');
+          if (roomPeerRef.current) {
+            try {
+              roomPeerRef.current.destroy();
+            } catch (e) {}
+            roomPeerRef.current = null;
+          }
+          isRoomHostRef.current = false;
+          connectToRoomHost(roomId);
+        } else {
+          console.warn('[RoomBeacon] Room peer error:', err.type, err.message);
+        }
+      });
+    } catch (e) {
+      console.warn('[RoomBeacon] Exception initializing room peer:', e);
+      connectToRoomHost(roomId);
+    }
+  }, [connectToPeer, connectToRoomHost]);
+
+  // Setup BroadcastChannel for local cross-tab pairing
   useEffect(() => {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       const bc = new BroadcastChannel('walkie_talkie_p2p_channel');
@@ -342,7 +482,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
         }
       };
 
-      // Announce presence
       bc.postMessage({
         type: 'announce-presence',
         peerId,
@@ -371,6 +510,9 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     peer.on('open', (id) => {
       console.log('[PeerJS] Connected to signaling broker with ID:', id);
       setConnectionStatus('connected');
+
+      // Auto-connect/host channel room beacon
+      initRoomBeacon(channelRef.current);
 
       // Check if URL query contains target peer ID to auto connect after QR code scan
       const urlParams = new URLSearchParams(window.location.search);
@@ -417,9 +559,24 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     return () => {
       if (dataConnRef.current) dataConnRef.current.close();
       if (mediaConnRef.current) mediaConnRef.current.close();
+      if (roomPeerRef.current) roomPeerRef.current.destroy();
       peer.destroy();
     };
-  }, [peerId, connectToPeer, initMicrophone, setupDataConnection, setupMediaCall]);
+  }, [peerId, connectToPeer, initMicrophone, setupDataConnection, setupMediaCall, initRoomBeacon]);
+
+  // Periodic channel room check if unpaired
+  useEffect(() => {
+    if (connectionStatus === 'paired') return;
+
+    const interval = setInterval(() => {
+      if (!isRoomHostRef.current && peerRef.current && !peerRef.current.destroyed) {
+        const roomId = getRoomPeerId(channelRef.current);
+        connectToRoomHost(roomId);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [connectionStatus, connectToRoomHost]);
 
   // Channel switch & manual peer pairing handler
   const changeChannel = useCallback((newChannel: string, targetPeerId?: string) => {
@@ -427,7 +584,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     if (navigator.vibrate) navigator.vibrate(15);
     setChannel(newChannel);
 
-    // Announce new channel presence to local BroadcastChannel
     if (broadcastChannelRef.current) {
       broadcastChannelRef.current.postMessage({
         type: 'announce-presence',
@@ -437,10 +593,12 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       });
     }
 
+    initRoomBeacon(newChannel);
+
     if (targetPeerId && targetPeerId !== peerId) {
       connectToPeer(targetPeerId);
     }
-  }, [peerId, connectToPeer]);
+  }, [peerId, connectToPeer, initRoomBeacon]);
 
   // Start Transmitting (PTT pressed)
   const startTalking = useCallback(async () => {

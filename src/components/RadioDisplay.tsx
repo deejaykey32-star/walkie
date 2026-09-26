@@ -17,6 +17,7 @@ interface RadioDisplayProps {
   callAlertIncoming: boolean;
   backlightColor: 'amber' | 'emerald' | 'cyan';
   onToggleBacklight: () => void;
+  onOpenChannelPicker?: () => void;
   isToggleMode?: boolean;
 }
 
@@ -35,6 +36,7 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
   callAlertIncoming,
   backlightColor,
   onToggleBacklight,
+  onOpenChannelPicker,
   isToggleMode = false,
 }) => {
   const currentLevel = isTransmitting ? txLevel : isReceiving ? rxLevel : 0;
@@ -143,22 +145,39 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
         </div>
       </div>
 
-      {/* Main Frequency & Channel Display */}
-      <div className="py-2.5 flex items-baseline justify-between">
+      {/* Main Frequency & Channel Display (Clickable to switch channels) */}
+      <div
+        onClick={(e) => {
+          if (onOpenChannelPicker) {
+            e.stopPropagation();
+            onOpenChannelPicker();
+          }
+        }}
+        className="py-2.5 px-2.5 my-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-amber-500/50 transition cursor-pointer flex items-center justify-between group"
+        title="Kliknij, aby zmienić kanał"
+      >
         <div>
-          <div className="text-[11px] font-bold text-white/40 tracking-wider">PMR-446 FM</div>
+          <div className="text-[11px] font-bold text-white/50 tracking-wider flex items-center gap-1.5">
+            <span>PMR-446 FM</span>
+            <span className="text-[9px] px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded font-sans group-hover:bg-amber-500 group-hover:text-slate-950 font-bold transition">
+              ZMIEN KANAŁ ▼
+            </span>
+          </div>
           <div className={`text-2xl font-black tracking-tight ${theme.textPrimary} drop-shadow-sm`}>
             {channel}
           </div>
         </div>
 
-        <div className="text-right">
-          <div className={`text-sm font-black tracking-wider ${theme.textPrimary}`}>
-            {frequency}
+        <div className="text-right flex items-center gap-2">
+          <div>
+            <div className={`text-sm font-black tracking-wider ${theme.textPrimary}`}>
+              {frequency}
+            </div>
+            <div className={`text-[10px] font-semibold ${theme.textDim}`}>
+              {subcode} • NARROW
+            </div>
           </div>
-          <div className={`text-[10px] font-semibold ${theme.textDim}`}>
-            {subcode} • NARROW
-          </div>
+          <Radio className="w-5 h-5 text-amber-400/80 group-hover:text-amber-300 transition shrink-0" />
         </div>
       </div>
 

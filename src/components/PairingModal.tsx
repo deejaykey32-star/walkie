@@ -281,7 +281,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
       <div className="w-full max-w-sm rounded-3xl border border-slate-700/80 bg-gradient-to-b from-slate-900 to-slate-950 p-5 sm:p-6 shadow-2xl text-slate-100 flex flex-col my-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useWalkieTalkie, CHANNELS } from './hooks/useWalkieTalkie';
 import { RadioDisplay } from './components/RadioDisplay';
+import { AudioEqualizer } from './components/AudioEqualizer';
 import { PairingModal } from './components/PairingModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -303,6 +304,15 @@ export default function App() {
             backlightColor={backlightColor}
             onToggleBacklight={cycleBacklight}
             isToggleMode={isToggleMode}
+          />
+        </div>
+
+        {/* Real-time Voice Equalizer & Spectrum Waveform Screen */}
+        <div className="mb-3">
+          <AudioEqualizer
+            isReceiving={isReceiving}
+            isTransmitting={isTransmitting}
+            backlightColor={backlightColor}
           />
         </div>
 

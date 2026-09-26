@@ -244,6 +244,52 @@ class AudioEngine {
     const avg = sum / this.remoteDataArray.length;
     return Math.min(100, Math.round((avg / 128) * 100));
   }
+
+  /**
+   * Get 16 frequency bands (0 to 100) for incoming RX audio equalizer
+   */
+  public getRemoteEqualizerBands(numBands = 16): number[] {
+    if (!this.remoteAnalyser || !this.remoteDataArray) {
+      return new Array(numBands).fill(0);
+    }
+    this.remoteAnalyser.getByteFrequencyData(this.remoteDataArray);
+    const result: number[] = [];
+    const step = Math.max(1, Math.floor(this.remoteDataArray.length / numBands));
+    for (let i = 0; i < numBands; i++) {
+      let sum = 0;
+      let count = 0;
+      for (let j = i * step; j < (i + 1) * step && j < this.remoteDataArray.length; j++) {
+        sum += this.remoteDataArray[j];
+        count++;
+      }
+      const val = count > 0 ? sum / count : 0;
+      result.push(Math.min(100, Math.round((val / 220) * 100)));
+    }
+    return result;
+  }
+
+  /**
+   * Get 16 frequency bands (0 to 100) for local TX mic equalizer
+   */
+  public getMicEqualizerBands(numBands = 16): number[] {
+    if (!this.micAnalyser || !this.micDataArray) {
+      return new Array(numBands).fill(0);
+    }
+    this.micAnalyser.getByteFrequencyData(this.micDataArray);
+    const result: number[] = [];
+    const step = Math.max(1, Math.floor(this.micDataArray.length / numBands));
+    for (let i = 0; i < numBands; i++) {
+      let sum = 0;
+      let count = 0;
+      for (let j = i * step; j < (i + 1) * step && j < this.micDataArray.length; j++) {
+        sum += this.micDataArray[j];
+        count++;
+      }
+      const val = count > 0 ? sum / count : 0;
+      result.push(Math.min(100, Math.round((val / 220) * 100)));
+    }
+    return result;
+  }
 }
 
 export const audioEngine = new AudioEngine();

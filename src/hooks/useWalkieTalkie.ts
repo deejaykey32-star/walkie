@@ -65,13 +65,13 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   }, [deviceName]);
 
   const peerRef = useRef<Peer | null>(null);
-  const beaconPeerRef = useRef<Peer | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
   const mediaConnRef = useRef<MediaConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const isTransmittingRef = useRef(false);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const roomWsRef = useRef<WebSocket | null>(null);
 
   // Hidden audio element for WebRTC remote sound
   useEffect(() => {
@@ -177,13 +177,24 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
 
   // Bind Data Connection events
   const setupDataConnection = useCallback((conn: DataConnection) => {
+    // PREVENT SELF-CONNECTION: Ignore if incoming peer ID matches self!
+    if (conn.peer === peerId) {
+      console.warn('[PeerJS] Guard activated: Self connection ignored.');
+      return;
+    }
+
     dataConnRef.current = conn;
 
     const handleDataOpen = () => {
-      console.log('[PeerJS] Data connection open with:', conn.peer);
+      console.log('[PeerJS] Data connection open with remote peer:', conn.peer);
       setIsP2PDirect(true);
       setConnectionStatus('paired');
-      setRemotePeer((prev) => prev || { peerId: conn.peer, name: 'Partner-Radio' });
+      setRemotePeer((prev) => {
+        if (!prev || prev.peerId !== conn.peer) {
+          return { peerId: conn.peer, name: 'Partner-Radio' };
+        }
+        return prev;
+      });
 
       try {
         conn.send({
@@ -208,11 +219,14 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
         const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
         switch (msg.type) {
           case 'peer-info':
-            setRemotePeer({
-              peerId: (msg.peerId as string) || conn.peer,
-              name: (msg.name as string) || 'Partner-Radio',
-            });
-            setConnectionStatus('paired');
+            // Verify remote peer is not self
+            if (msg.peerId !== peerId) {
+              setRemotePeer({
+                peerId: (msg.peerId as string) || conn.peer,
+                name: (msg.name as string) || 'Partner-Radio',
+              });
+              setConnectionStatus('paired');
+            }
             break;
 
           case 'ptt-start':
@@ -246,7 +260,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     });
 
     conn.on('close', () => {
-      console.log('[PeerJS] Data connection closed');
+      console.log('[PeerJS] Data connection closed with:', conn.peer);
       setIsP2PDirect(false);
       setRemotePeer(null);
       setIsReceiving(false);
@@ -260,10 +274,16 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
 
   // Bind Media Call events
   const setupMediaCall = useCallback((call: MediaConnection) => {
+    // PREVENT SELF-CALL: Ignore if call is from self!
+    if (call.peer === peerId) {
+      console.warn('[PeerJS] Guard activated: Self call ignored.');
+      return;
+    }
+
     mediaConnRef.current = call;
 
     call.on('stream', (remoteStream) => {
-      console.log('[PeerJS] Received remote audio stream!');
+      console.log('[PeerJS] Received remote audio stream from peer:', call.peer);
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.play().catch((e) => console.warn('Play error:', e));
@@ -281,14 +301,17 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     call.on('error', (err) => {
       console.warn('[PeerJS] Media call error:', err);
     });
-  }, []);
+  }, [peerId]);
 
-  // Connect directly to target peer ID
+  // Connect directly to target remote peer ID (strictly preventing self-connection)
   const connectToPeer = useCallback(async (targetPeerId: string) => {
     if (!peerRef.current || peerRef.current.destroyed) return;
-    if (targetPeerId === peerId) return;
+    if (!targetPeerId || targetPeerId === peerId) {
+      console.warn('[PeerJS] Ignored attempt to connect to self:', targetPeerId);
+      return;
+    }
 
-    console.log('[PeerJS] Connecting to target peer:', targetPeerId);
+    console.log('[PeerJS] Connecting to remote peer:', targetPeerId);
     setConnectionStatus('connecting');
 
     const stream = await initMicrophone();
@@ -313,7 +336,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       bc.onmessage = (event) => {
         const data = event.data;
         if (data && data.type === 'announce-presence') {
-          if (data.channel === channelRef.current && data.peerId !== peerId) {
+          if (data.channel === channelRef.current && data.peerId && data.peerId !== peerId) {
             connectToPeer(data.peerId);
           }
         }
@@ -334,78 +357,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       }
     };
   }, [peerId, connectToPeer]);
-
-  // PeerJS Channel Room Beacon for automatic channel room pairing across the internet
-  useEffect(() => {
-    let beacon: Peer | null = null;
-    const cleanChannelName = channel.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-    const beaconId = `WTBEACON-${cleanChannelName}`;
-
-    // First try connecting to the channel beacon host
-    if (peerRef.current && !peerRef.current.destroyed) {
-      const conn = peerRef.current.connect(beaconId, {
-        metadata: { peerId, name: deviceNameRef.current },
-      });
-
-      const handleBeaconOpen = () => {
-        console.log('[Room Beacon] Connected to existing channel host:', beaconId);
-        setupDataConnection(conn);
-      };
-
-      if (conn.open) {
-        handleBeaconOpen();
-      } else {
-        conn.on('open', handleBeaconOpen);
-      }
-
-      conn.on('error', () => {
-        // Beacon host not available, create beacon for this channel
-        createBeaconHost();
-      });
-    }
-
-    function createBeaconHost() {
-      if (beaconPeerRef.current) {
-        beaconPeerRef.current.destroy();
-        beaconPeerRef.current = null;
-      }
-
-      try {
-        beacon = new Peer(beaconId, { config: STUN_SERVERS });
-        beaconPeerRef.current = beacon;
-
-        beacon.on('open', () => {
-          console.log('[Room Beacon] Registered as channel room beacon:', beaconId);
-        });
-
-        beacon.on('connection', (conn) => {
-          console.log('[Room Beacon] Room connection from:', conn.peer);
-          setupDataConnection(conn);
-        });
-
-        beacon.on('call', async (call) => {
-          let stream = localStreamRef.current;
-          if (!stream) stream = await initMicrophone();
-          if (stream) call.answer(stream);
-          else call.answer();
-          setupMediaCall(call);
-        });
-
-        beacon.on('error', () => {
-          // Ignore beacon collision if already hosted
-        });
-      } catch (e) {
-        console.warn('Beacon creation warning:', e);
-      }
-    }
-
-    return () => {
-      if (beaconPeerRef.current) {
-        beaconPeerRef.current.destroy();
-        beaconPeerRef.current = null;
-      }
-    };
-  }, [channel, peerId, setupDataConnection, setupMediaCall, initMicrophone]);
 
   // Main PeerJS Initialization Effect (Runs ONLY ONCE per peerId)
   useEffect(() => {
@@ -430,12 +381,14 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     });
 
     peer.on('connection', (conn) => {
-      console.log('[PeerJS] Incoming data connection from:', conn.peer);
+      if (conn.peer === peerId) return; // Prevent self connection
+      console.log('[PeerJS] Incoming data connection from remote peer:', conn.peer);
       setupDataConnection(conn);
     });
 
     peer.on('call', async (call) => {
-      console.log('[PeerJS] Incoming media call from:', call.peer);
+      if (call.peer === peerId) return; // Prevent self call
+      console.log('[PeerJS] Incoming media call from remote peer:', call.peer);
       let stream = localStreamRef.current;
       if (!stream) {
         stream = await initMicrophone();
@@ -466,7 +419,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       if (mediaConnRef.current) mediaConnRef.current.close();
       peer.destroy();
     };
-  }, [peerId]); // Intentionally ONLY peerId so channel switch never destroys PeerJS
+  }, [peerId, connectToPeer, initMicrophone, setupDataConnection, setupMediaCall]);
 
   // Channel switch & manual peer pairing handler
   const changeChannel = useCallback((newChannel: string, targetPeerId?: string) => {
@@ -484,7 +437,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       });
     }
 
-    if (targetPeerId) {
+    if (targetPeerId && targetPeerId !== peerId) {
       connectToPeer(targetPeerId);
     }
   }, [peerId, connectToPeer]);

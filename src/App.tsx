@@ -3,26 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Mic,
   MicOff,
   Radio,
   QrCode,
   Volume2,
-  VolumeX,
   BellRing,
   HelpCircle,
-  Sliders,
   Sparkles,
-  Smartphone,
-  CheckCircle2,
   ChevronDown,
-  Info,
   RadioTower,
-  Lock,
-  Unlock,
   X,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { useWalkieTalkie, CHANNELS } from './hooks/useWalkieTalkie';
 import { RadioDisplay } from './components/RadioDisplay';
@@ -39,24 +33,27 @@ export default function App() {
     peerId,
     deviceName,
     connectionStatus,
+    connectionErrorMessage: connectionError,
     isP2PDirect,
     isTransmitting,
     isReceiving,
     remotePeer,
     micAllowed,
+    micErrorDetails: micError,
     txLevel,
     rxLevel,
     callAlertIncoming,
     volume,
-    squelch,
     setVolume,
-    setSquelch,
     changeChannel,
     startTalking,
     stopTalking,
     sendCallTone,
     initMicrophone,
     updateDeviceName,
+    generateCompleteServerlessOffer,
+    processServerlessOfferAndAnswer,
+    isGatheringIce,
   } = useWalkieTalkie();
 
   const [isPairingOpen, setIsPairingOpen] = useState(false);
@@ -70,7 +67,7 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
 
-  // Toggle mode state: false = hold-to-talk (tradycyjne PTT), true = tap-to-toggle (Hands-Free / kliknij aby włączyć/wyłączyć)
+  // Toggle mode state: false = hold-to-talk (tradycyjne PTT), true = tap-to-toggle (Hands-Free / 1-kliknij aby mówić)
   const [isToggleMode, setIsToggleMode] = useState<boolean>(() => {
     if (typeof localStorage !== 'undefined') {
       return localStorage.getItem('walkie_toggle_mode') === 'true';
@@ -159,7 +156,7 @@ export default function App() {
     };
   }, [isToggleMode, isTransmitting, spaceHeld, startTalking, stopTalking]);
 
-  // Request mic permission and toggle/start talking
+  // Request mic permission and toggle/start talking on direct user gesture
   const handlePttClick = useCallback(
     async (e: React.SyntheticEvent) => {
       e.preventDefault();
@@ -207,6 +204,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-[#0a0c0e] text-slate-100 flex flex-col items-center justify-between p-3 sm:p-6 font-sans select-none overflow-x-hidden">
+      <OfflineIndicator />
+
       {/* Header Bar */}
       <header className="w-full max-w-md flex items-center justify-between py-2 px-1 mb-2">
         <div className="flex items-center gap-2.5">
@@ -253,7 +252,6 @@ export default function App() {
         <div className="flex items-end justify-between px-3 -mt-6 sm:-mt-7 mb-2">
           {/* Antenna */}
           <div className="flex flex-col items-center">
-            {/* Radio wave pulse when transmitting */}
             {isTransmitting && (
               <div className="flex gap-1 mb-1 animate-pulse">
                 <span className="w-1 h-3 bg-red-500 rounded-full" />
@@ -364,6 +362,32 @@ export default function App() {
           />
         </div>
 
+        {/* WebRTC Disconnection / Recovery Alert Banner */}
+        {connectionError && (
+          <div className="mb-3 p-2.5 rounded-xl bg-amber-950/80 border border-amber-500/60 text-[11px] text-amber-200 flex items-center justify-between gap-2 shadow-lg animate-pulse">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{connectionError}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Microphone Permission / Error Warning Banner */}
+        {(micAllowed === false || micError) && (
+          <div className="mb-3 p-2.5 rounded-xl bg-red-950/80 border border-red-500/50 text-[11px] text-red-200 flex items-center justify-between gap-2 shadow-md">
+            <div className="flex items-center gap-2">
+              <MicOff className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{micError || 'Mikrofon wymaga zgody w przeglądarce.'}</span>
+            </div>
+            <button
+              onClick={initMicrophone}
+              className="px-2.5 py-1 bg-red-600 hover:bg-red-500 rounded-lg text-white font-bold uppercase text-[10px] shrink-0 active:scale-95 transition"
+            >
+              Włącz
+            </button>
+          </div>
+        )}
+
         {/* PROMINENT AVAILABLE CHANNELS BAR (1-TAP) */}
         <div className="mb-3 p-2.5 rounded-2xl bg-black/50 border border-slate-800 flex flex-col gap-1.5">
           <div className="flex items-center justify-between text-[10px] font-black uppercase text-amber-400 px-1">
@@ -397,22 +421,6 @@ export default function App() {
             })}
           </div>
         </div>
-
-        {/* Microphone Permission Warning Banner */}
-        {micAllowed === false && (
-          <div className="mb-3 p-2.5 rounded-xl bg-red-950/80 border border-red-500/50 text-[11px] text-red-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <MicOff className="w-4 h-4 text-red-400 shrink-0" />
-              <span>Mikrofon jest zablokowany w przeglądarce.</span>
-            </div>
-            <button
-              onClick={initMicrophone}
-              className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-white font-bold uppercase text-[10px]"
-            >
-              Włącz
-            </button>
-          </div>
-        )}
 
         {/* Quick Function Controls Row */}
         <div className="grid grid-cols-4 gap-1.5 mb-3 text-center">
@@ -506,7 +514,6 @@ export default function App() {
                 : 'bg-gradient-to-b from-[#2e3742] via-[#212831] to-[#151a20] border-[#44505f] hover:border-amber-500/60 shadow-xl'
             }`}
           >
-            {/* Grip Ridges */}
             <div className="absolute inset-x-8 top-3 flex justify-between opacity-30 pointer-events-none">
               <span className="w-full h-1 bg-white/40 rounded-full" />
             </div>
@@ -514,12 +521,10 @@ export default function App() {
               <span className="w-full h-1 bg-white/40 rounded-full" />
             </div>
 
-            {/* Ripple rings while transmitting */}
             {isTransmitting && (
               <div className="absolute inset-0 border-4 border-amber-300 rounded-3xl animate-ping opacity-30 pointer-events-none" />
             )}
 
-            {/* PTT Main Icon & Text */}
             <div className="relative z-10 flex flex-col items-center text-center px-4">
               <div
                 className={`p-3 rounded-full mb-1.5 transition-colors ${
@@ -530,7 +535,7 @@ export default function App() {
                     : 'bg-[#181d23] text-amber-400 group-hover:text-amber-300'
                 }`}
               >
-                <Mic className="w-8 h-8" />
+                <Radio className="w-8 h-8" />
               </div>
 
               <span
@@ -606,6 +611,19 @@ export default function App() {
         </p>
       </footer>
 
+      {/* Pairing Modal */}
+      <PairingModal
+        channel={channel}
+        isOpen={isPairingOpen}
+        onClose={() => setIsPairingOpen(false)}
+        onChannelSelect={changeChannel}
+        deviceName={deviceName}
+        peerId={peerId}
+        generateCompleteServerlessOffer={generateCompleteServerlessOffer}
+        processServerlessOfferAndAnswer={processServerlessOfferAndAnswer}
+        isGatheringIce={isGatheringIce}
+      />
+
       {/* Channel Picker Modal */}
       {showChannelPicker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
@@ -645,15 +663,12 @@ export default function App() {
                         {ch.freq} • {ch.subcode}
                       </div>
                     </div>
-                    {isActive && (
-                      <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />
-                    )}
+                    {isActive && <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />}
                   </button>
                 );
               })}
             </div>
 
-            {/* Custom Channel Input inside Channel Picker Modal */}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -702,11 +717,8 @@ export default function App() {
             </div>
 
             <div className="my-5 flex flex-col items-center gap-4">
-              <div className="text-3xl font-black font-mono text-emerald-400">
-                {volume}%
-              </div>
+              <div className="text-3xl font-black font-mono text-emerald-400">{volume}%</div>
 
-              {/* Slider */}
               <input
                 type="range"
                 min="0"
@@ -720,7 +732,6 @@ export default function App() {
                 className="w-full h-3 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-emerald-500"
               />
 
-              {/* Quick Preset Buttons */}
               <div className="grid grid-cols-5 gap-1.5 w-full">
                 {[0, 25, 50, 75, 100].map((level) => (
                   <button
@@ -797,61 +808,38 @@ export default function App() {
       {showGuide && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl text-slate-100 space-y-4">
-            <div className="flex items-center gap-2.5 pb-2 border-b border-slate-800">
-              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
-                <Info className="w-5 h-5" />
-              </div>
-              <h3 className="font-bold text-base text-white">Instrukcja Walkie-Talkie</h3>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <h3 className="font-bold text-base text-white flex items-center gap-2">
+                <HelpCircle className="w-5 h-5 text-amber-400" />
+                Instrukcja obsługi
+              </h3>
+              <button
+                onClick={() => setShowGuide(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-
-            <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
-              <div className="p-2.5 rounded-xl bg-slate-800/80">
-                <h4 className="font-bold text-amber-400 mb-1">1. Tryby rozmowy (PTT vs Hands-Free)</h4>
-                <p>
-                  Przycisk <strong>„Tryb: 1-Klik”</strong> na radiu pozwala na przełączenie trybu rozmowy. W trybie 1-Klik wystarczy kliknąć przycisk raz, aby włączyć mikrofon i zacząć mówić (bez trzymania), a kliknąć ponownie aby zakończyć.
-                </p>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-800/80">
-                <h4 className="font-bold text-amber-400 mb-1">2. Połączenie 2 smartfonów</h4>
-                <p>
-                  Na telefonie 1 dotknij przycisku <strong>„Połącz 2 tel”</strong> i pokaż kod QR. Na telefonie 2 otwórz aparat lub kliknij link i dołącz do tego samego kanału radiowego.
-                </p>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-800/80">
-                <h4 className="font-bold text-amber-400 mb-1">3. Rozmowa PTT w czasie rzeczywistym</h4>
-                <p>
-                  Rozmawiaj bezpośrednio w jakości HD P2P bez opóźnień. Po zakończeniu nadawania rozlegnie się klasyczny sygnał „Roger Beep”.
-                </p>
-              </div>
+            <div className="text-xs text-slate-300 space-y-3 font-normal leading-relaxed">
+              <p>
+                <strong>1. Łączenie dwóch smartfonów:</strong> Użyj przycisku <em>„Połącz 2 tel”</em> i zeskanuj kod QR z pierwszego smartfona na drugim lub wpisz ten sam kod kanału (np. CH-01 lub własne słowo kluczowe).
+              </p>
+              <p>
+                <strong>2. Rozmowa bez trzymania (Hands-Free):</strong> Kliknij przycisk <em>„Tryb: Trzymaj”</em>, aby przełączyć na <em>„Tryb: 1-Klik”</em>. Wtedy 1 kliknięcie włącza mikrofon, a 2-gie go wyłącza.
+              </p>
+              <p>
+                <strong>3. Parowanie bezserwerowe (Serverless):</strong> Kod QR generuje ofertę SDP dopiero po pełnym zebraniu ICE (<code>icegatheringstatechange === 'complete'</code>).
+              </p>
             </div>
-
             <button
               onClick={() => setShowGuide(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-xs font-bold uppercase tracking-wider text-slate-950 hover:bg-amber-400 transition"
+              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 text-xs font-bold uppercase"
             >
-              Rozumiem, zamknij
+              Rozumiem
             </button>
           </div>
         </div>
       )}
-
-      {/* Pairing / QR Code Modal */}
-      <PairingModal
-        isOpen={isPairingOpen}
-        onClose={() => setIsPairingOpen(false)}
-        channel={channel}
-        peerId={peerId}
-        onChannelSelect={(ch, targetPeerId) => {
-          changeChannel(ch, targetPeerId);
-          setIsPairingOpen(false);
-        }}
-        deviceName={deviceName}
-      />
-
-      {/* Offline Status Toast */}
-      <OfflineIndicator />
     </div>
   );
 }

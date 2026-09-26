@@ -13,10 +13,10 @@ import {
   Radio,
   ArrowRight,
   ShieldCheck,
-  ShieldAlert,
   RefreshCw,
-  Key,
   Video,
+  Loader2,
+  Wifi,
 } from 'lucide-react';
 
 interface PairingModalProps {
@@ -26,6 +26,12 @@ interface PairingModalProps {
   onChannelSelect: (ch: string, targetPeerId?: string) => void;
   deviceName: string;
   peerId?: string;
+  generateServerlessOffer?: () => Promise<string | null>;
+  processServerlessOffer?: (encodedOffer: string) => Promise<string | null>;
+  processServerlessAnswer?: (encodedAnswer: string) => Promise<boolean>;
+  generateCompleteServerlessOffer?: () => Promise<string | null>;
+  processServerlessOfferAndAnswer?: (sdp: string) => Promise<string | null>;
+  isGatheringIce?: boolean;
 }
 
 export const PairingModal: React.FC<PairingModalProps> = ({
@@ -35,6 +41,12 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   onChannelSelect,
   deviceName,
   peerId,
+  generateServerlessOffer,
+  processServerlessOffer,
+  processServerlessAnswer,
+  generateCompleteServerlessOffer,
+  processServerlessOfferAndAnswer,
+  isGatheringIce = false,
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
@@ -43,11 +55,16 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const [customChannelInput, setCustomChannelInput] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  
+  // Tryb parowania: 'peer' (Szybki link z ID) vs 'sdp' (Bezserwerowy Serverless SDP po zbieraniu ICE)
+  const [pairingMode, setPairingMode] = useState<'peer' | 'sdp'>('sdp');
+  const [completeSdpPayload, setCompleteSdpPayload] = useState<string | null>(null);
+  const [sdpAnswerGenerated, setSdpAnswerGenerated] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Determine base public URL for QR code generation (avoids localhost inside native APK container)
+  // Bazowy URL dla celów generowania linków
   const baseUrl =
     typeof window !== 'undefined' &&
     !window.location.origin.includes('localhost') &&
@@ -55,45 +72,67 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       ? window.location.origin
       : 'https://walkie-talkie-p2p.pages.dev';
 
-  // Generate shareable URL with embedded Peer ID for 1-scan P2P connection
-  const shareUrl = `${baseUrl}/?ch=${encodeURIComponent(channel)}${
-    peerId ? `&peer=${encodeURIComponent(peerId)}` : ''
-  }`;
-
+  /**
+   * GENEROWANIE KOMPLETNEGO KODU QR I LINKU SERVERLESS (Wymaganie #1):
+   * Kod NIE wygeneruje oferty natychmiast. Czeka na zakończone zbieranie ICE (icegatheringstatechange === 'complete').
+   */
   useEffect(() => {
-    if (shareUrl) {
+    if (!isOpen) return;
+
+    if (pairingMode === 'sdp' && generateCompleteServerlessOffer) {
+      setQrDataUrl('');
+      generateCompleteServerlessOffer().then((sdp) => {
+        if (sdp) {
+          setCompleteSdpPayload(sdp);
+          const fullServerlessUrl = `${baseUrl}/?ch=${encodeURIComponent(channel)}&sdp=${encodeURIComponent(sdp)}`;
+          QRCode.toDataURL(fullServerlessUrl, {
+            width: 320,
+            margin: 2,
+            color: { dark: '#0a0d10', light: '#f8fafc' },
+          })
+            .then(setQrDataUrl)
+            .catch(console.error);
+        }
+      });
+    } else {
+      // Standardowy link parowania z ID radiotelefonu
+      const shareUrl = `${baseUrl}/?ch=${encodeURIComponent(channel)}${
+        peerId ? `&peer=${encodeURIComponent(peerId)}` : ''
+      }`;
       QRCode.toDataURL(shareUrl, {
         width: 320,
         margin: 2,
-        color: {
-          dark: '#0a0d10',
-          light: '#f8fafc',
-        },
+        color: { dark: '#0a0d10', light: '#f8fafc' },
       })
         .then(setQrDataUrl)
         .catch(console.error);
     }
-  }, [shareUrl]);
+  }, [isOpen, pairingMode, channel, peerId, baseUrl, generateCompleteServerlessOffer]);
+
+  const currentShareUrl =
+    pairingMode === 'sdp' && completeSdpPayload
+      ? `${baseUrl}/?ch=${encodeURIComponent(channel)}&sdp=${encodeURIComponent(completeSdpPayload)}`
+      : `${baseUrl}/?ch=${encodeURIComponent(channel)}${peerId ? `&peer=${encodeURIComponent(peerId)}` : ''}`;
 
   // Copy full URL to clipboard
   const handleCopyUrl = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(currentShareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
-      console.warn('Copy URL failed:', e);
+      console.warn('Błąd kopiowania linku:', e);
     }
   };
 
-  // Copy full shareable link to clipboard when KOPIUJ KOD button is tapped
+  // Copy channel access code to clipboard
   const handleCopyCode = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl || channel);
+      await navigator.clipboard.writeText(currentShareUrl || channel);
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
     } catch (e) {
-      console.warn('Copy code failed:', e);
+      console.warn('Błąd kopiowania kodu:', e);
     }
   };
 
@@ -102,9 +141,9 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'Połącz krótkofalówkę Walkie-Talkie',
-          text: `Kod połączenia z telefonem (${deviceName}): ${channel}\nLink: ${shareUrl}`,
-          url: shareUrl,
+          title: 'Połącz Walkie-Talkie P2P',
+          text: `Kod kanału (${deviceName}): ${channel}\nLink WebRTC SDP: ${currentShareUrl}`,
+          url: currentShareUrl,
         });
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
@@ -121,7 +160,6 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     setScanError(null);
     setIsScanning(false);
 
-    // 1. If running inside Native Android APK container, explicitly request Native Android Camera Permission via Capacitor Plugin
     if (Capacitor.isNativePlatform()) {
       try {
         const check = await CapCamera.checkPermissions();
@@ -129,39 +167,31 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           const req = await CapCamera.requestPermissions({ permissions: ['camera'] });
           if (req.camera !== 'granted') {
             setScanError(
-              'Zezwolenie na aparat jest wymagane w aplikacji Android. Przyznaj uprawnienie w wyskakującym okienku.'
+              'Zezwolenie na aparat jest wymagane w aplikacji Android APK. Przyznaj uprawnienie w ustawieniach aparatu.'
             );
             return;
           }
         }
       } catch (e) {
-        console.warn('Capacitor native camera permission check warning:', e);
+        console.warn('Błąd sprawdzania uprawnień aparatu Capacitor:', e);
       }
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setScanError(
-        'Brak obsługi aparatu w tym środowisku przeglądarki. Użyj bezpiecznego połączenia HTTPS.'
-      );
+      setScanError('Brak obsługi aparatu w bieżącym środowisku przeglądarki.');
       return;
     }
 
     let stream: MediaStream | null = null;
     try {
-      // 2. First attempt: Rear environment camera
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       });
     } catch (err1) {
-      console.warn('FacingMode environment failed, trying default camera:', err1);
       try {
-        // 3. Fallback attempt: Any available camera stream
         stream = await navigator.mediaDevices.getUserMedia({ video: true });
       } catch (err2) {
-        console.warn('Camera permission denied or device not found:', err2);
-        setScanError(
-          'Aplikacja zablokowała dostęp do aparatu. Kliknij przycisk poniżej, aby wywołać monit o udzielenie zgody.'
-        );
+        setScanError('Zablokowano dostęp do aparatu. Kliknij przycisk ponownego zapytania poniżej.');
         return;
       }
     }
@@ -173,11 +203,10 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           await videoRef.current.play();
           setIsScanning(true);
         } catch (e) {
-          console.warn('Video play error:', e);
+          console.warn('Błąd odtwarzania wideo:', e);
         }
       }
 
-      // 4. Initialize offscreen canvas for jsQR frame decoding
       const canvas = document.createElement('canvas');
       const canvasCtx = canvas.getContext('2d', { willReadFrequently: true });
 
@@ -199,7 +228,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           });
 
           if (result && result.data) {
-            console.log('[QR Scanner] Successfully decoded QR code:', result.data);
+            console.log('[Skaner QR] Zeskanowano zawartość:', result.data);
             handleScannedUrl(result.data);
           }
         }
@@ -207,7 +236,6 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   };
 
-  // Stop camera stream cleanly
   const stopCameraStream = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
@@ -232,18 +260,34 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     };
   }, [activeTab, isOpen]);
 
-  const handleScannedUrl = (url: string) => {
+  const handleScannedUrl = async (url: string) => {
     try {
       const parsed = new URL(url);
       const ch = parsed.searchParams.get('ch') || parsed.searchParams.get('channel');
       const targetPeer = parsed.searchParams.get('peer');
+      const sdpParam = parsed.searchParams.get('sdp');
+
+      if (sdpParam && processServerlessOfferAndAnswer) {
+        stopCameraStream();
+        const answer = await processServerlessOfferAndAnswer(sdpParam);
+        if (answer) {
+          setSdpAnswerGenerated(answer);
+        }
+        onClose();
+        return;
+      }
+
       if (ch) {
         onChannelSelect(ch, targetPeer || undefined);
         stopCameraStream();
         onClose();
       }
     } catch {
-      if (url.trim()) {
+      if (url.trim().length > 30 && processServerlessOfferAndAnswer) {
+        stopCameraStream();
+        await processServerlessOfferAndAnswer(url.trim());
+        onClose();
+      } else if (url.trim()) {
         onChannelSelect(url.trim().toUpperCase());
         stopCameraStream();
         onClose();
@@ -251,7 +295,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   };
 
-  const handleManualSubmit = (e: React.FormEvent) => {
+  const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const input = customChannelInput.trim();
     if (!input) return;
@@ -260,6 +304,14 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       const parsed = new URL(input);
       const ch = parsed.searchParams.get('ch') || parsed.searchParams.get('channel');
       const targetPeer = parsed.searchParams.get('peer');
+      const sdpParam = parsed.searchParams.get('sdp');
+
+      if (sdpParam && processServerlessOfferAndAnswer) {
+        await processServerlessOfferAndAnswer(sdpParam);
+        onClose();
+        return;
+      }
+
       if (ch) {
         onChannelSelect(ch, targetPeer || undefined);
         onClose();
@@ -269,7 +321,10 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       // Not a URL
     }
 
-    if (input.startsWith('WT-')) {
+    if (input.length > 50 && processServerlessOfferAndAnswer) {
+      await processServerlessOfferAndAnswer(input);
+      onClose();
+    } else if (input.startsWith('WT-')) {
       onChannelSelect(channel, input.toUpperCase());
       onClose();
     } else {
@@ -290,8 +345,8 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <QrCode className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-white">Parowanie Walkie-Talkie</h3>
-              <p className="text-xs text-amber-400 font-mono">Bieżący kanał: {channel}</p>
+              <h3 className="font-bold text-base text-white">Parowanie Walkie-Talkie P2P</h3>
+              <p className="text-xs text-amber-400 font-mono">Kanał: {channel}</p>
             </div>
           </div>
           <button
@@ -306,7 +361,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         <div className="my-3 p-3 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex items-center justify-between">
           <div>
             <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider block">
-              KOD DOSTĘPU / POŁĄCZENIA:
+              KOD POŁĄCZENIA / KANAŁU:
             </span>
             <span className="text-xl font-black font-mono text-white tracking-widest">{channel}</span>
           </div>
@@ -318,14 +373,34 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           </button>
         </div>
 
+        {/* Serverless vs Quick Link Toggle */}
+        <div className="flex gap-1 mb-3 p-1 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] font-bold">
+          <button
+            onClick={() => setPairingMode('sdp')}
+            className={`flex-1 py-1 rounded-lg flex items-center justify-center gap-1 transition ${
+              pairingMode === 'sdp' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+            <span>Serverless (Pełne SDP ICE)</span>
+          </button>
+          <button
+            onClick={() => setPairingMode('peer')}
+            className={`flex-1 py-1 rounded-lg flex items-center justify-center gap-1 transition ${
+              pairingMode === 'peer' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400'
+            }`}
+          >
+            <Wifi className="w-3.5 h-3.5 text-amber-400" />
+            <span>Szybki ID Link</span>
+          </button>
+        </div>
+
         {/* Tabs */}
         <div className="flex gap-1.5 p-1 bg-slate-950/80 border border-slate-800 rounded-xl mb-4 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('qr')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'qr'
-                ? 'bg-amber-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'qr' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <QrCode className="w-3.5 h-3.5" />
@@ -334,9 +409,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           <button
             onClick={() => setActiveTab('scan')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'scan'
-                ? 'bg-amber-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'scan' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Camera className="w-3.5 h-3.5" />
@@ -345,9 +418,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           <button
             onClick={() => setActiveTab('manual')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'manual'
-                ? 'bg-amber-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'manual' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Radio className="w-3.5 h-3.5" />
@@ -358,12 +429,22 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         {/* Tab 1: Show QR code & Access Code */}
         {activeTab === 'qr' && (
           <div className="flex flex-col items-center">
-            <div className="p-3 bg-white rounded-2xl shadow-lg border-4 border-amber-500/30">
-              {qrDataUrl ? (
-                <img src={qrDataUrl} alt="Kod QR Połączenia" className="w-48 h-48 rounded-lg" />
+            <div className="p-3 bg-white rounded-2xl shadow-lg border-4 border-amber-500/30 min-h-[210px] min-w-[210px] flex items-center justify-center relative">
+              {isGatheringIce ? (
+                <div className="flex flex-col items-center justify-center p-4 text-center">
+                  <Loader2 className="w-8 h-8 text-amber-500 animate-spin mb-2" />
+                  <span className="text-xs text-slate-900 font-bold">
+                    Zbieranie kandydatów ICE...
+                  </span>
+                  <span className="text-[10px] text-slate-600 font-mono mt-1">
+                    icegatheringstatechange: complete
+                  </span>
+                </div>
+              ) : qrDataUrl ? (
+                <img src={qrDataUrl} alt="Kod QR Połączenia WebRTC" className="w-48 h-48 rounded-lg" />
               ) : (
                 <div className="w-48 h-48 flex items-center justify-center text-slate-900 font-mono text-xs">
-                  Generowanie kodu...
+                  Generowanie pełnego SDP...
                 </div>
               )}
             </div>
@@ -400,7 +481,6 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             <div className="relative w-full aspect-square max-h-52 rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 flex flex-col items-center justify-center">
               <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
 
-              {/* Target sight box when active */}
               {isScanning ? (
                 <div className="absolute inset-6 border-2 border-dashed border-amber-400/80 rounded-xl pointer-events-none animate-pulse flex items-center justify-center">
                   <span className="text-[10px] text-amber-300 font-mono bg-black/60 px-2 py-0.5 rounded">
@@ -472,18 +552,15 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             <form onSubmit={handleManualSubmit} className="space-y-3 pt-2 border-t border-slate-800">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Lub Wpisz Własny Kod Dostępu:
+                  Lub Wpisz Kod Kanału / Wklej Ofertę SDP:
                 </label>
                 <input
                   type="text"
                   value={customChannelInput}
                   onChange={(e) => setCustomChannelInput(e.target.value)}
-                  placeholder="np. ALFA, PATROL, 7721..."
+                  placeholder="np. ALFA, PATROL lub wklej link z SDP..."
                   className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2.5 text-sm font-mono text-amber-400 uppercase placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Wpisz ten sam kod na obu telefonach, aby rozmawiać P2P.
-                </p>
               </div>
 
               <button

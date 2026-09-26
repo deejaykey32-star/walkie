@@ -1,6 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 
+        UPRAWNIENIA WYMAGANE DLA APLIKACJI WALKIE-TALKIE P2P (ANDROID APK):
+        1. RECORD_AUDIO - Wymagane do rejestrowania głosu z mikrofonu przyciskiem PTT.
+        2. INTERNET - Wymagane dla transmisji głosu P2P i sygnalizacji WebRTC / STUN / TURN.
+        3. MODIFY_AUDIO_SETTINGS - Wymagane do kontroli głośności i przełączania głośnika.
+        4. ACCESS_NETWORK_STATE - Monitorowanie stanu połączenia sieciowego Wi-Fi / LTE.
+        5. WAKE_LOCK - Zapobieganie uśpieniu procesora i mikrofonu podczas transmisji głosu.
+        6. CAMERA - Skanowanie kodów QR parowania telefonów w czasie rzeczywistym.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Opcjonalne deklaracje sprzętowe (aparat i mikrofon) dla kompatybilności z rynkiem Google Play -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -35,15 +56,4 @@
         </provider>
     </application>
 
-    <!-- Permissions -->
-
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.CAMERA" />
-
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

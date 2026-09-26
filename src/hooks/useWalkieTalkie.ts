@@ -65,6 +65,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   }, [deviceName]);
 
   const peerRef = useRef<Peer | null>(null);
+  const beaconPeerRef = useRef<Peer | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
   const mediaConnRef = useRef<MediaConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -333,6 +334,78 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       }
     };
   }, [peerId, connectToPeer]);
+
+  // PeerJS Channel Room Beacon for automatic channel room pairing across the internet
+  useEffect(() => {
+    let beacon: Peer | null = null;
+    const cleanChannelName = channel.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const beaconId = `WTBEACON-${cleanChannelName}`;
+
+    // First try connecting to the channel beacon host
+    if (peerRef.current && !peerRef.current.destroyed) {
+      const conn = peerRef.current.connect(beaconId, {
+        metadata: { peerId, name: deviceNameRef.current },
+      });
+
+      const handleBeaconOpen = () => {
+        console.log('[Room Beacon] Connected to existing channel host:', beaconId);
+        setupDataConnection(conn);
+      };
+
+      if (conn.open) {
+        handleBeaconOpen();
+      } else {
+        conn.on('open', handleBeaconOpen);
+      }
+
+      conn.on('error', () => {
+        // Beacon host not available, create beacon for this channel
+        createBeaconHost();
+      });
+    }
+
+    function createBeaconHost() {
+      if (beaconPeerRef.current) {
+        beaconPeerRef.current.destroy();
+        beaconPeerRef.current = null;
+      }
+
+      try {
+        beacon = new Peer(beaconId, { config: STUN_SERVERS });
+        beaconPeerRef.current = beacon;
+
+        beacon.on('open', () => {
+          console.log('[Room Beacon] Registered as channel room beacon:', beaconId);
+        });
+
+        beacon.on('connection', (conn) => {
+          console.log('[Room Beacon] Room connection from:', conn.peer);
+          setupDataConnection(conn);
+        });
+
+        beacon.on('call', async (call) => {
+          let stream = localStreamRef.current;
+          if (!stream) stream = await initMicrophone();
+          if (stream) call.answer(stream);
+          else call.answer();
+          setupMediaCall(call);
+        });
+
+        beacon.on('error', () => {
+          // Ignore beacon collision if already hosted
+        });
+      } catch (e) {
+        console.warn('Beacon creation warning:', e);
+      }
+    }
+
+    return () => {
+      if (beaconPeerRef.current) {
+        beaconPeerRef.current.destroy();
+        beaconPeerRef.current = null;
+      }
+    };
+  }, [channel, peerId, setupDataConnection, setupMediaCall, initMicrophone]);
 
   // Main PeerJS Initialization Effect (Runs ONLY ONCE per peerId)
   useEffect(() => {

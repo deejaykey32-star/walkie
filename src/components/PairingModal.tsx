@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 import { Capacitor } from '@capacitor/core';
 import { Camera as CapCamera } from '@capacitor/camera';
 import {
@@ -176,34 +177,33 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         }
       }
 
-      // 4. Initialize BarcodeDetector if available
-      let detector: unknown = null;
-      if ('BarcodeDetector' in window) {
-        try {
-          // @ts-expect-error - BarcodeDetector browser API
-          detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-        } catch (e) {
-          console.warn('BarcodeDetector error:', e);
-        }
-      }
+      // 4. Initialize offscreen canvas for jsQR frame decoding
+      const canvas = document.createElement('canvas');
+      const canvasCtx = canvas.getContext('2d', { willReadFrequently: true });
 
       if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
 
-      scanIntervalRef.current = setInterval(async () => {
+      scanIntervalRef.current = setInterval(() => {
         if (!videoRef.current || videoRef.current.readyState < 2) return;
-        try {
-          if (detector) {
-            // @ts-expect-error - detector call
-            const barcodes = await detector.detect(videoRef.current);
-            if (barcodes && barcodes.length > 0) {
-              const scannedRaw = barcodes[0].rawValue;
-              handleScannedUrl(scannedRaw);
-            }
+        const video = videoRef.current;
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+
+        if (w > 0 && h > 0 && canvasCtx) {
+          canvas.width = w;
+          canvas.height = h;
+          canvasCtx.drawImage(video, 0, 0, w, h);
+          const imageData = canvasCtx.getImageData(0, 0, w, h);
+          const result = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'dontInvert',
+          });
+
+          if (result && result.data) {
+            console.log('[QR Scanner] Successfully decoded QR code:', result.data);
+            handleScannedUrl(result.data);
           }
-        } catch {
-          // Ignore frame decode error
         }
-      }, 300);
+      }, 250);
     }
   };
 

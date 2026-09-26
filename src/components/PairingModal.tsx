@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { QrCode, Share2, Copy, Check, Camera, X, Radio, ArrowRight, ShieldCheck } from 'lucide-react';
+import { QrCode, Share2, Copy, Check, Camera, X, Radio, ArrowRight, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 
 interface PairingModalProps {
   channel: string;
@@ -22,6 +22,9 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const [activeTab, setActiveTab] = useState<'qr' | 'scan' | 'manual'>('qr');
   const [customChannelInput, setCustomChannelInput] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
+  const [permissionRequested, setPermissionRequested] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -75,74 +78,87 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   };
 
-  // Built-in Camera Scanner
-  useEffect(() => {
-    if (activeTab !== 'scan') {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
-        videoRef.current.srcObject = null;
-      }
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-      }
-      return;
-    }
+  // Request camera permission and start video stream automatically
+  const startCameraStream = async () => {
+    setScanError(null);
+    setPermissionRequested(true);
+    setIsScanning(true);
 
-    let stream: MediaStream | null = null;
-    let detector: unknown = null;
-
-    if ('BarcodeDetector' in window) {
-      try {
-        // @ts-expect-error - BarcodeDetector is a modern browser API
-        detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-      } catch (e) {
-        console.warn('BarcodeDetector error:', e);
-      }
-    }
-
-    navigator.mediaDevices
-      ?.getUserMedia({ video: { facingMode: 'environment' } })
-      .then((s) => {
-        stream = s;
-        if (videoRef.current) {
-          videoRef.current.srcObject = s;
-          videoRef.current.play().catch(() => {});
-        }
-
-        // Periodic detection
-        if (detector) {
-          scanIntervalRef.current = setInterval(async () => {
-            if (!videoRef.current || videoRef.current.readyState < 2) return;
-            try {
-              // @ts-expect-error - detector call
-              const barcodes = await detector.detect(videoRef.current);
-              if (barcodes && barcodes.length > 0) {
-                const scannedRaw = barcodes[0].rawValue;
-                handleScannedUrl(scannedRaw);
-              }
-            } catch {
-              // Ignore frame errors
-            }
-          }, 350);
-        } else {
-          setScanError('Twoja przeglądarka nie obsługuje bezpośredniego skanowania w oknie. Możesz otworzyć standardowy aparat lub zeskanować link Google Lens.');
-        }
-      })
-      .catch((err) => {
-        console.warn('Camera access denied:', err);
-        setScanError('Brak uprawnień do aparatu fotograficznego.');
+    try {
+      // 1. Check & Prompt Camera Permission via getUserMedia
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
 
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      // 2. Initialize BarcodeDetector or Canvas scanning loop
+      let detector: unknown = null;
+      if ('BarcodeDetector' in window) {
+        try {
+          // @ts-expect-error - BarcodeDetector browser API
+          detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        } catch (e) {
+          console.warn('BarcodeDetector initialization warning:', e);
+        }
+      }
+
+      scanIntervalRef.current = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState < 2) return;
+        try {
+          if (detector) {
+            // @ts-expect-error - detector call
+            const barcodes = await detector.detect(videoRef.current);
+            if (barcodes && barcodes.length > 0) {
+              const scannedRaw = barcodes[0].rawValue;
+              handleScannedUrl(scannedRaw);
+            }
+          }
+        } catch {
+          // Frame decode error ignored
+        }
+      }, 300);
+    } catch (err) {
+      console.warn('Camera permission denied or error:', err);
+      setIsScanning(false);
+      const errorMsg = (err as Error).name === 'NotAllowedError'
+        ? 'Brak uprawnień. Zezwól na dostęp do aparatu w wyskakującym okienku przeglądarki.'
+        : 'Nie można uzyskać dostępu do aparatu. Upewnij się, że inne aplikacje go nie używają.';
+      setScanError(errorMsg);
+    }
+  };
+
+  // Clean up camera stream when leaving tab or closing modal
+  const stopCameraStream = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach((t) => t.stop());
+      videoRef.current.srcObject = null;
+    }
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    setIsScanning(false);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'scan' && isOpen) {
+      startCameraStream();
+    } else {
+      stopCameraStream();
+    }
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-      }
+      stopCameraStream();
     };
-  }, [activeTab]);
+  }, [activeTab, isOpen]);
 
   const handleScannedUrl = (url: string) => {
     try {
@@ -150,12 +166,13 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       const ch = parsed.searchParams.get('ch') || parsed.searchParams.get('channel');
       if (ch) {
         onChannelSelect(ch);
+        stopCameraStream();
         onClose();
       }
     } catch {
-      // If user typed raw channel
       if (url.trim()) {
         onChannelSelect(url.trim().toUpperCase());
+        stopCameraStream();
         onClose();
       }
     }
@@ -273,16 +290,27 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             <div className="relative w-full aspect-square max-h-56 rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 flex items-center justify-center">
               <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
               {/* Target sight box */}
-              <div className="absolute inset-8 border-2 border-dashed border-amber-400/80 rounded-xl pointer-events-none animate-pulse" />
+              {isScanning && (
+                <div className="absolute inset-8 border-2 border-dashed border-amber-400/80 rounded-xl pointer-events-none animate-pulse" />
+              )}
             </div>
 
             {scanError ? (
-              <p className="mt-3 text-xs text-amber-300 text-center bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl">
-                {scanError}
-              </p>
+              <div className="mt-3 text-center space-y-2">
+                <p className="text-xs text-amber-300 bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl">
+                  {scanError}
+                </p>
+                <button
+                  onClick={startCameraStream}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold uppercase transition active:scale-95"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Udziel uprawnień do aparatu</span>
+                </button>
+              </div>
             ) : (
-              <p className="mt-3 text-xs text-slate-400 text-center">
-                Skieruj obiektyw na kod QR wyświetlony na ekranie drugiego telefonu.
+              <p className="mt-3 text-xs text-slate-300 text-center">
+                Skieruj obiektyw na kod QR drugiego telefonu. Uprawnienie do aparatu zostanie przyznane automatycznie.
               </p>
             )}
           </div>

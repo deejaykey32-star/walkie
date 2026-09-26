@@ -85,10 +85,10 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   };
 
-  // Copy channel access code only
+  // Copy full shareable link to clipboard when KOPIUJ KOD button is tapped
   const handleCopyCode = async () => {
     try {
-      await navigator.clipboard.writeText(channel);
+      await navigator.clipboard.writeText(shareUrl || channel);
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
     } catch (e) {
@@ -253,8 +253,27 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (customChannelInput.trim()) {
-      onChannelSelect(customChannelInput.trim().toUpperCase());
+    const input = customChannelInput.trim();
+    if (!input) return;
+
+    try {
+      const parsed = new URL(input);
+      const ch = parsed.searchParams.get('ch') || parsed.searchParams.get('channel');
+      const targetPeer = parsed.searchParams.get('peer');
+      if (ch) {
+        onChannelSelect(ch, targetPeer || undefined);
+        onClose();
+        return;
+      }
+    } catch {
+      // Not a URL
+    }
+
+    if (input.startsWith('WT-')) {
+      onChannelSelect(channel, input.toUpperCase());
+      onClose();
+    } else {
+      onChannelSelect(input.toUpperCase());
       onClose();
     }
   };

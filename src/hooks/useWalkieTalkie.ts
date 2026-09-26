@@ -178,18 +178,29 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   const setupDataConnection = useCallback((conn: DataConnection) => {
     dataConnRef.current = conn;
 
-    conn.on('open', () => {
+    const handleDataOpen = () => {
       console.log('[PeerJS] Data connection open with:', conn.peer);
       setIsP2PDirect(true);
       setConnectionStatus('paired');
+      setRemotePeer((prev) => prev || { peerId: conn.peer, name: 'Partner-Radio' });
 
-      conn.send({
-        type: 'peer-info',
-        peerId,
-        name: deviceNameRef.current,
-        channel: channelRef.current,
-      });
-    });
+      try {
+        conn.send({
+          type: 'peer-info',
+          peerId,
+          name: deviceNameRef.current,
+          channel: channelRef.current,
+        });
+      } catch (e) {
+        console.warn('Error sending peer-info:', e);
+      }
+    };
+
+    if (conn.open) {
+      handleDataOpen();
+    } else {
+      conn.on('open', handleDataOpen);
+    }
 
     conn.on('data', (data: unknown) => {
       try {

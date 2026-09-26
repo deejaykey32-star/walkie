@@ -22,6 +22,7 @@ import {
   RadioTower,
   Lock,
   Unlock,
+  X,
 } from 'lucide-react';
 import { useWalkieTalkie, CHANNELS } from './hooks/useWalkieTalkie';
 import { RadioDisplay } from './components/RadioDisplay';

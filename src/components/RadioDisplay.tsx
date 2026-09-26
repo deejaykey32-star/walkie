@@ -1,5 +1,5 @@
 import React from 'react';
-import { Wifi, Signal, Radio, Volume2, ShieldAlert, Cpu } from 'lucide-react';
+import { Wifi, Signal, Radio, Volume2, ShieldAlert, Cpu, Mic, Lock, Zap } from 'lucide-react';
 import { ConnectionStatus, PeerInfo } from '../hooks/useWalkieTalkie';
 
 interface RadioDisplayProps {
@@ -17,6 +17,7 @@ interface RadioDisplayProps {
   callAlertIncoming: boolean;
   backlightColor: 'amber' | 'emerald' | 'cyan';
   onToggleBacklight: () => void;
+  isToggleMode?: boolean;
 }
 
 export const RadioDisplay: React.FC<RadioDisplayProps> = ({
@@ -34,6 +35,7 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
   callAlertIncoming,
   backlightColor,
   onToggleBacklight,
+  isToggleMode = false,
 }) => {
   const currentLevel = isTransmitting ? txLevel : isReceiving ? rxLevel : 0;
   // Calculate 10-segment VU meter
@@ -84,7 +86,7 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
       {/* Top Header Indicators */}
       <div className="flex items-center justify-between text-[10px] pb-1.5 border-b border-white/10 uppercase tracking-widest font-bold">
         {/* Status flags */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {/* TX (Transmit) LED */}
           <span
             className={`px-1.5 py-0.5 rounded text-[9px] font-black transition-all ${
@@ -101,6 +103,17 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
             }`}
           >
             RX
+          </span>
+
+          {/* Mode Badge: Hands-Free (1-click) vs Hold PTT */}
+          <span
+            className={`px-1.5 py-0.5 rounded text-[9px] font-black tracking-tighter ${
+              isToggleMode
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                : 'bg-white/5 text-white/30'
+            }`}
+          >
+            {isToggleMode ? 'HANDS-FREE 1X' : 'PTT HOLD'}
           </span>
 
           {/* Direct P2P badge */}
@@ -198,11 +211,6 @@ export const RadioDisplay: React.FC<RadioDisplayProps> = ({
         <div className="text-[9px] text-white/40 shrink-0">
           STUN: GOOGLE
         </div>
-      </div>
-
-      {/* Tap hint in subtle text */}
-      <div className="absolute right-2 top-2 opacity-0 hover:opacity-70 text-[8px] text-white/30 pointer-events-none">
-        Dotknij, aby zmienić podświetlenie
       </div>
     </div>
   );

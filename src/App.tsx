@@ -20,6 +20,8 @@ import {
   ChevronDown,
   Info,
   RadioTower,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import { useWalkieTalkie, CHANNELS } from './hooks/useWalkieTalkie';
 import { RadioDisplay } from './components/RadioDisplay';
@@ -63,6 +65,23 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
 
+  // Toggle mode state: false = hold-to-talk (tradycyjne PTT), true = tap-to-toggle (Hands-Free / kliknij aby włączyć/wyłączyć)
+  const [isToggleMode, setIsToggleMode] = useState<boolean>(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('walkie_toggle_mode') === 'true';
+    }
+    return false;
+  });
+
+  const toggleTalkingMode = () => {
+    const next = !isToggleMode;
+    setIsToggleMode(next);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('walkie_toggle_mode', String(next));
+    }
+    audioEngine.playKnobClick();
+  };
+
   const currentChannelObj = channels.find((c) => c.id === channel) || {
     id: channel,
     name: `KANAŁ ${channel}`,
@@ -89,19 +108,26 @@ export default function App() {
   // Keyboard Spacebar PTT support for easy testing
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat && !spaceHeld) {
-        // Prevent page scroll when holding space
+      if (e.code === 'Space' && !e.repeat) {
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
           e.preventDefault();
-          setSpaceHeld(true);
-          startTalking();
+          if (isToggleMode) {
+            if (isTransmitting) {
+              stopTalking();
+            } else {
+              startTalking();
+            }
+          } else if (!spaceHeld) {
+            setSpaceHeld(true);
+            startTalking();
+          }
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && spaceHeld) {
+      if (e.code === 'Space' && !isToggleMode && spaceHeld) {
         e.preventDefault();
         setSpaceHeld(false);
         stopTalking();
@@ -114,26 +140,46 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [spaceHeld, startTalking, stopTalking]);
+  }, [isToggleMode, isTransmitting, spaceHeld, startTalking, stopTalking]);
 
-  // Request mic permission on first touch if not already requested
+  // Request mic permission and toggle/start talking
+  const handlePttClick = useCallback(
+    async (e: React.SyntheticEvent) => {
+      e.preventDefault();
+      if (micAllowed === null || micAllowed === false) {
+        await initMicrophone();
+      }
+
+      if (isToggleMode) {
+        if (isTransmitting) {
+          stopTalking();
+        } else {
+          startTalking();
+        }
+      }
+    },
+    [micAllowed, initMicrophone, isToggleMode, isTransmitting, startTalking, stopTalking]
+  );
+
   const handlePttStart = useCallback(
     async (e: React.SyntheticEvent) => {
+      if (isToggleMode) return;
       e.preventDefault();
       if (micAllowed === null || micAllowed === false) {
         await initMicrophone();
       }
       startTalking();
     },
-    [micAllowed, initMicrophone, startTalking]
+    [isToggleMode, micAllowed, initMicrophone, startTalking]
   );
 
   const handlePttEnd = useCallback(
     (e: React.SyntheticEvent) => {
+      if (isToggleMode) return;
       e.preventDefault();
       stopTalking();
     },
-    [stopTalking]
+    [isToggleMode, stopTalking]
   );
 
   const handleSaveName = (e: React.FormEvent) => {
@@ -143,10 +189,10 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07090b] text-slate-100 flex flex-col items-center justify-between p-2 sm:p-4 select-none touch-manipulation">
-      {/* Top App Header */}
-      <header className="w-full max-w-md flex items-center justify-between py-2 px-3 bg-slate-900/60 backdrop-blur-md border border-slate-800 rounded-2xl mb-2">
-        <div className="flex items-center gap-2">
+    <div className="min-h-screen w-full bg-[#0a0c0e] text-slate-100 flex flex-col items-center justify-between p-3 sm:p-6 font-sans select-none overflow-x-hidden">
+      {/* Header Bar */}
+      <header className="w-full max-w-md flex items-center justify-between py-2 px-1 mb-2">
+        <div className="flex items-center gap-2.5">
           <div className="relative">
             <RadioTower className="w-5 h-5 text-amber-500" />
             <span
@@ -255,6 +301,7 @@ export default function App() {
             callAlertIncoming={callAlertIncoming}
             backlightColor={backlightColor}
             onToggleBacklight={cycleBacklight}
+            isToggleMode={isToggleMode}
           />
         </div>
 
@@ -285,6 +332,22 @@ export default function App() {
             <span className="text-[10px] font-bold uppercase tracking-tight">Połącz 2 tel</span>
           </button>
 
+          {/* Toggle Mode Button: Hands-Free vs Hold PTT */}
+          <button
+            onClick={toggleTalkingMode}
+            className={`flex flex-col items-center justify-center p-2 rounded-xl border transition active:scale-95 ${
+              isToggleMode
+                ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300 shadow-md shadow-emerald-950/40'
+                : 'bg-[#1d232a] border-slate-700/80 text-slate-300 hover:border-amber-500/60'
+            }`}
+            title="Przełącz tryb rozmowy: 1-kliknięcie (Hands-Free) vs Przytrzymaj (PTT)"
+          >
+            <RadioTower className="w-4 h-4 mb-1 text-emerald-400" />
+            <span className="text-[10px] font-bold uppercase tracking-tight">
+              {isToggleMode ? 'Tryb: 1-Klik' : 'Tryb: Trzymaj'}
+            </span>
+          </button>
+
           {/* Call Tone / Siren */}
           <button
             onClick={sendCallTone}
@@ -307,15 +370,6 @@ export default function App() {
             <span className="text-[10px] font-bold uppercase tracking-tight">
               Roger: {rogerBeepOn ? 'WŁ' : 'WYŁ'}
             </span>
-          </button>
-
-          {/* Channel selector modal opener */}
-          <button
-            onClick={() => setShowChannelPicker(true)}
-            className="flex flex-col items-center justify-center p-2 rounded-xl bg-[#1d232a] border border-slate-700/80 hover:border-emerald-500/60 hover:bg-slate-800 transition active:scale-95 text-slate-200"
-          >
-            <Sliders className="w-4 h-4 text-emerald-400 mb-1" />
-            <span className="text-[10px] font-bold uppercase tracking-tight">Kanały</span>
           </button>
         </div>
 
@@ -342,6 +396,7 @@ export default function App() {
         {/* GIANT ERGONOMIC PUSH-TO-TALK (PTT) BUTTON */}
         <div className="w-full flex flex-col items-center my-1">
           <button
+            onClick={handlePttClick}
             onMouseDown={handlePttStart}
             onMouseUp={handlePttEnd}
             onMouseLeave={handlePttEnd}
@@ -395,9 +450,13 @@ export default function App() {
                 }`}
               >
                 {isTransmitting
-                  ? 'NADAJESZ GŁOS...'
+                  ? isToggleMode
+                    ? '🎙️ ROZMAWIASZ (KLIKNIJ ABY ZAKOŃCZYĆ)'
+                    : 'NADAJESZ GŁOS...'
                   : isReceiving
                   ? 'ODBIERANIE GŁOSU...'
+                  : isToggleMode
+                  ? 'KLIKNIJ 1X ABY MÓWIĆ'
                   : 'TRZYMAJ ABY MÓWIĆ'}
               </span>
 
@@ -411,7 +470,11 @@ export default function App() {
                 }`}
               >
                 {isTransmitting
-                  ? 'Puść przycisk, aby usłyszeć Roger Beep'
+                  ? isToggleMode
+                    ? 'Kliknij ponownie, aby wyłączyć mikrofon'
+                    : 'Puść przycisk, aby usłyszeć Roger Beep'
+                  : isToggleMode
+                  ? 'Tryb bez trzymania (Hands-Free). Kliknij raz aby zacząć mówić'
                   : 'Naciśnij i trzymaj (lub klawisz Spacja)'}
               </span>
             </div>
@@ -446,41 +509,25 @@ export default function App() {
       {/* Quick instructions strip at bottom */}
       <footer className="w-full max-w-md mt-2 text-center text-[11px] text-slate-500">
         <p>
-          Zainstaluj aplikację na 2 telefonach Android. Użyj przycisku <strong>„Połącz 2 tel”</strong>, aby zeskanować kod QR.
+          Tryb rozmowy: użyj przycisku <strong>„Tryb: 1-Klik”</strong> na radiu, aby rozmawiać bez trzymania przycisku.
         </p>
       </footer>
 
-      {/* Pairing & QR Code Modal */}
-      <PairingModal
-        channel={channel}
-        isOpen={isPairingOpen}
-        onClose={() => setIsPairingOpen(false)}
-        onChannelSelect={changeChannel}
-        deviceName={deviceName}
-      />
-
-      {/* Channel Selector Drawer */}
+      {/* Channel Picker Modal */}
       {showChannelPicker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100 flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Sliders className="w-5 h-5 text-emerald-400" />
-                <h3 className="font-bold text-base text-white">Wybór Kanału Radiowego</h3>
-              </div>
+              <h3 className="font-bold text-base text-white">Wybierz kanał częstotliwości</h3>
               <button
                 onClick={() => setShowChannelPicker(false)}
-                className="text-xs px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
               >
-                Zamknij
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-400 mt-2 mb-3">
-              Standardowe pasmo PMR 446 MHz. Oba telefony muszą mieć ustawiony ten sam kanał:
-            </p>
-
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            <div className="my-3 space-y-2 overflow-y-auto pr-1">
               {channels.map((ch) => {
                 const isActive = ch.id === channel;
                 return (
@@ -490,10 +537,10 @@ export default function App() {
                       changeChannel(ch.id);
                       setShowChannelPicker(false);
                     }}
-                    className={`w-full flex items-center justify-between p-3 rounded-xl border text-left transition ${
+                    className={`w-full flex items-center justify-between p-3 rounded-2xl border transition ${
                       isActive
-                        ? 'bg-amber-500/20 border-amber-500 text-white'
-                        : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:bg-slate-800'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-200 hover:bg-slate-800'
                     }`}
                   >
                     <div>
@@ -565,12 +612,10 @@ export default function App() {
 
             <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
               <div className="p-2.5 rounded-xl bg-slate-800/80">
-                <h4 className="font-bold text-amber-400 mb-1">1. Dostępne 3 Wersje Aplikacji</h4>
-                <ul className="space-y-1 list-disc list-inside text-slate-300">
-                  <li><strong>Natywna Android (.APK):</strong> Instalator bezpośredni Capacitor dla smartfonów z systemem Android.</li>
-                  <li><strong>Wersja Webowa:</strong> Bezpośredni dostęp w internecie przez przeglądarkę bez instalacji.</li>
-                  <li><strong>Aplikacja PWA:</strong> Instalowana z 1 kliknięcia przyciskiem „Zainstaluj PWA” na ekran główny.</li>
-                </ul>
+                <h4 className="font-bold text-amber-400 mb-1">1. Tryby rozmowy (PTT vs Hands-Free)</h4>
+                <p>
+                  Przycisk <strong>„Tryb: 1-Klik”</strong> na radiu pozwala na przełączenie trybu rozmowy. W trybie 1-Klik wystarczy kliknąć przycisk raz, aby włączyć mikrofon i zacząć mówić (bez trzymania), a kliknąć ponownie aby zakończyć.
+                </p>
               </div>
 
               <div className="p-2.5 rounded-xl bg-slate-800/80">
@@ -583,7 +628,7 @@ export default function App() {
               <div className="p-2.5 rounded-xl bg-slate-800/80">
                 <h4 className="font-bold text-amber-400 mb-1">3. Rozmowa PTT w czasie rzeczywistym</h4>
                 <p>
-                  Przytrzymaj duży przycisk <strong>PTT</strong> i zacznij mówić. Twój głos trafi bezpośrednio na drugi smartfon (WebRTC P2P). Po puszczeniu przycisku rozlegnie się klasyczny sygnał „Roger Beep”.
+                  Rozmawiaj bezpośrednio w jakości HD P2P bez opóźnień. Po zakończeniu nadawania rozlegnie się klasyczny sygnał „Roger Beep”.
                 </p>
               </div>
             </div>

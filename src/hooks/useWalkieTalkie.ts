@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import Peer, { DataConnection, MediaConnection } from 'peerjs';
 import { audioEngine } from '../utils/audioEngine';
 
 export interface PeerInfo {
@@ -52,17 +53,18 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   const [volume, setVolume] = useState(85); // 0 to 100
   const [squelch, setSquelch] = useState(50); // 0 to 100
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const peerRef = useRef<Peer | null>(null);
+  const dataConnRef = useRef<DataConnection | null>(null);
+  const mediaConnRef = useRef<MediaConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const isTransmittingRef = useRef(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
-  // Hidden audio element for WebRTC remote sound
+  // Audio element setup
   useEffect(() => {
     const audio = new Audio();
     audio.autoplay = true;
+    audio.volume = volume / 100;
     remoteAudioRef.current = audio;
 
     return () => {
@@ -78,23 +80,13 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     }
   }, [volume]);
 
-  // Read URL query parameter for instant channel pairing
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const chParam = urlParams.get('ch') || urlParams.get('channel');
-    if (chParam) {
-      const match = CHANNELS.find(c => c.id.toLowerCase() === chParam.toLowerCase() || c.name.toLowerCase() === chParam.toLowerCase());
-      if (match) {
-        setChannel(match.id);
-      } else {
-        setChannel(chParam.toUpperCase());
-      }
-    }
-  }, []);
-
-  // Initialize Microphone
+  // Microphone initialization
   const initMicrophone = useCallback(async () => {
-    if (localStreamRef.current) return localStreamRef.current;
+    if (localStreamRef.current && localStreamRef.current.active) {
+      setMicAllowed(true);
+      return localStreamRef.current;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -104,8 +96,8 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
         },
       });
 
-      // Initially mute track so we don't transmit until PTT is held down
-      stream.getAudioTracks().forEach(track => {
+      // Initially mute track so microphone won't record until user presses PTT
+      stream.getAudioTracks().forEach((track) => {
         track.enabled = false;
       });
 
@@ -113,344 +105,270 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       audioEngine.setupMicAnalyser(stream);
       setMicAllowed(true);
 
-      // If peer connection exists, add track
-      if (pcRef.current) {
-        stream.getAudioTracks().forEach(track => {
-          pcRef.current?.addTrack(track, stream);
-        });
+      // If media connection is already active, replace track
+      if (mediaConnRef.current && mediaConnRef.current.peerConnection) {
+        const senders = mediaConnRef.current.peerConnection.getSenders();
+        const audioTrack = stream.getAudioTracks()[0];
+        const sender = senders.find((s) => s.track?.kind === 'audio');
+        if (sender && audioTrack) {
+          sender.replaceTrack(audioTrack);
+        }
       }
 
       return stream;
     } catch (err) {
-      console.warn('Microphone permission denied or unavailable:', err);
+      console.warn('[Microphone] Permission error:', err);
       setMicAllowed(false);
       return null;
     }
   }, []);
 
-  // WebRTC Peer Connection Setup
-  const createPeerConnection = useCallback((targetPeerId: string, isInitiator: boolean) => {
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-
-    const pc = new RTCPeerConnection(STUN_SERVERS);
-    pcRef.current = pc;
-
-    // Add local tracks if microphone already granted
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current!);
-      });
-    }
-
-    // Remote audio track received
-    pc.ontrack = (event) => {
-      console.log('[WebRTC] Received remote audio track!');
-      if (remoteAudioRef.current && event.streams[0]) {
-        remoteAudioRef.current.srcObject = event.streams[0];
-        audioEngine.setupRemoteAnalyser(event.streams[0]);
-      }
-    };
-
-    // ICE candidate exchange
-    pc.onicecandidate = (event) => {
-      if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'signal',
-            targetId: targetPeerId,
-            senderId: peerId,
-            data: {
-              type: 'candidate',
-              candidate: event.candidate,
-            },
-          })
-        );
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      console.log('[WebRTC] ICE Connection State:', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        setIsP2PDirect(true);
-        setConnectionStatus('paired');
-      } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        setIsP2PDirect(false);
-      }
-    };
-
-    // If initiator, create and send Offer
-    if (isInitiator) {
-      pc.createOffer({ offerToReceiveAudio: true })
-        .then(offer => pc.setLocalDescription(offer))
-        .then(() => {
-          if (wsRef.current?.readyState === WebSocket.OPEN && pc.localDescription) {
-            wsRef.current.send(
-              JSON.stringify({
-                type: 'signal',
-                targetId: targetPeerId,
-                senderId: peerId,
-                data: pc.localDescription,
-              })
-            );
-          }
-        })
-        .catch(err => console.error('[WebRTC] Error creating offer:', err));
-    }
-
-    return pc;
-  }, [peerId]);
-
-  // WebSocket signaling connection
+  // Auto initialize mic & audio context on user interaction
   useEffect(() => {
-    let isMounted = true;
-    let reconnectTimeout: ReturnType<typeof setTimeout>;
+    // Attempt init on mount
+    initMicrophone();
 
-    function connect() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
-      console.log('[Walkie-Talkie] Connecting WS to', wsUrl);
-      setConnectionStatus('connecting');
+    const unlockAudio = () => {
+      audioEngine.playKnobClick();
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
+      if (!localStreamRef.current) {
+        initMicrophone();
+      }
+    };
 
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (!isMounted) return;
-        setConnectionStatus('connected');
-        // Join channel
-        ws.send(
-          JSON.stringify({
-            type: 'join',
-            channel,
-            peerId,
-            name: deviceName,
-          })
-        );
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          switch (msg.type) {
-            case 'joined-success': {
-              if (msg.peers && msg.peers.length > 0) {
-                const partner = msg.peers[0];
-                setRemotePeer(partner);
-                setConnectionStatus('paired');
-                // Initiate WebRTC peer connection
-                createPeerConnection(partner.peerId, true);
-              } else {
-                setRemotePeer(null);
-                setConnectionStatus('connected');
-              }
-              break;
-            }
-
-            case 'peer-joined': {
-              setRemotePeer({ peerId: msg.peerId, name: msg.name });
-              setConnectionStatus('paired');
-              // Let newcomer initiate or create peer connection
-              createPeerConnection(msg.peerId, false);
-              break;
-            }
-
-            case 'peer-left': {
-              if (remotePeer?.peerId === msg.peerId) {
-                setRemotePeer(null);
-                setIsReceiving(false);
-                setIsP2PDirect(false);
-                setConnectionStatus('connected');
-                if (pcRef.current) {
-                  pcRef.current.close();
-                  pcRef.current = null;
-                }
-              }
-              break;
-            }
-
-            case 'signal': {
-              const { data, senderId } = msg;
-              if (!pcRef.current) {
-                createPeerConnection(senderId, false);
-              }
-              const pc = pcRef.current;
-              if (!pc) return;
-
-              if (data.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(data));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                ws.send(
-                  JSON.stringify({
-                    type: 'signal',
-                    targetId: senderId,
-                    senderId: peerId,
-                    data: pc.localDescription,
-                  })
-                );
-              } else if (data.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(data));
-              } else if (data.type === 'candidate') {
-                try {
-                  await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-                } catch (e) {
-                  console.warn('Error adding ICE candidate:', e);
-                }
-              }
-              break;
-            }
-
-            case 'ptt-start': {
-              setIsReceiving(true);
-              audioEngine.playPttStart();
-              if (navigator.vibrate) {
-                navigator.vibrate(30);
-              }
-              break;
-            }
-
-            case 'ptt-end': {
-              setIsReceiving(false);
-              audioEngine.playRogerBeep();
-              if (navigator.vibrate) {
-                navigator.vibrate([20, 40, 20]);
-              }
-              break;
-            }
-
-            case 'audio-relay': {
-              // Fallback audio chunk from peer via WebSocket
-              if (msg.audioData && !isP2PDirect) {
-                try {
-                  const audioBlob = await fetch(msg.audioData).then(r => r.blob());
-                  const audioUrl = URL.createObjectURL(audioBlob);
-                  const chunkAudio = new Audio(audioUrl);
-                  chunkAudio.volume = volume / 100;
-                  chunkAudio.play().catch(() => {});
-                } catch (e) {
-                  console.warn('Audio relay playback error:', e);
-                }
-              }
-              break;
-            }
-
-            case 'call-alert': {
-              setCallAlertIncoming(true);
-              audioEngine.playCallAlert();
-              if (navigator.vibrate) {
-                navigator.vibrate([100, 50, 100, 50, 100]);
-              }
-              setTimeout(() => setCallAlertIncoming(false), 3000);
-              break;
-            }
-
-            default:
-              break;
-          }
-        } catch (e) {
-          console.error('Error parsing WS message:', e);
-        }
-      };
-
-      ws.onclose = () => {
-        if (!isMounted) return;
-        setConnectionStatus('disconnected');
-        setIsP2PDirect(false);
-        reconnectTimeout = setTimeout(connect, 2500);
-      };
-
-      ws.onerror = (err) => {
-        console.warn('WS error:', err);
-        ws.close();
-      };
-    }
-
-    connect();
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+    window.addEventListener('mousedown', unlockAudio, { once: true });
+    window.addEventListener('click', unlockAudio, { once: true });
 
     return () => {
-      isMounted = false;
-      clearTimeout(reconnectTimeout);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (pcRef.current) {
-        pcRef.current.close();
-      }
+      window.removeEventListener('touchstart', unlockAudio);
+      window.removeEventListener('mousedown', unlockAudio);
+      window.removeEventListener('click', unlockAudio);
     };
-  }, [channel, peerId, deviceName, createPeerConnection, volume, isP2PDirect, remotePeer?.peerId]);
+  }, [initMicrophone]);
 
-  // Channel switch
-  const changeChannel = useCallback((newChannel: string) => {
-    if (newChannel === channel) return;
+  // Bind Data Connection events
+  const setupDataConnection = useCallback((conn: DataConnection) => {
+    dataConnRef.current = conn;
+
+    conn.on('open', () => {
+      console.log('[PeerJS] Data connection open with:', conn.peer);
+      setIsP2PDirect(true);
+      setConnectionStatus('paired');
+
+      // Send local device name
+      conn.send({
+        type: 'peer-info',
+        peerId,
+        name: deviceName,
+      });
+    });
+
+    conn.on('data', (data: unknown) => {
+      try {
+        const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
+        switch (msg.type) {
+          case 'peer-info':
+            setRemotePeer({
+              peerId: (msg.peerId as string) || conn.peer,
+              name: (msg.name as string) || 'Partner-Radio',
+            });
+            setConnectionStatus('paired');
+            break;
+
+          case 'ptt-start':
+            setIsReceiving(true);
+            audioEngine.playPttStart();
+            if (remoteAudioRef.current) {
+              remoteAudioRef.current.play().catch(() => {});
+            }
+            if (navigator.vibrate) navigator.vibrate(30);
+            break;
+
+          case 'ptt-end':
+            setIsReceiving(false);
+            audioEngine.playRogerBeep();
+            if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+            break;
+
+          case 'call-alert':
+            setCallAlertIncoming(true);
+            audioEngine.playCallAlert();
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 100]);
+            setTimeout(() => setCallAlertIncoming(false), 3000);
+            break;
+
+          default:
+            break;
+        }
+      } catch (e) {
+        console.warn('Error parsing PeerJS data:', e);
+      }
+    });
+
+    conn.on('close', () => {
+      console.log('[PeerJS] Data connection closed');
+      setIsP2PDirect(false);
+      setRemotePeer(null);
+      setIsReceiving(false);
+      setConnectionStatus('connected');
+    });
+
+    conn.on('error', (err) => {
+      console.warn('[PeerJS] Data connection error:', err);
+    });
+  }, [peerId, deviceName]);
+
+  // Bind Media Call events
+  const setupMediaCall = useCallback((call: MediaConnection) => {
+    mediaConnRef.current = call;
+
+    call.on('stream', (remoteStream) => {
+      console.log('[PeerJS] Received remote audio stream!');
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.play().catch((e) => console.warn('Play error:', e));
+        audioEngine.setupRemoteAnalyser(remoteStream);
+      }
+      setIsP2PDirect(true);
+      setConnectionStatus('paired');
+    });
+
+    call.on('close', () => {
+      setIsP2PDirect(false);
+      setIsReceiving(false);
+    });
+
+    call.on('error', (err) => {
+      console.warn('[PeerJS] Media call error:', err);
+    });
+  }, []);
+
+  // Connect directly to target peer ID
+  const connectToPeer = useCallback(async (targetPeerId: string) => {
+    if (!peerRef.current || peerRef.current.destroyed) return;
+    if (targetPeerId === peerId) return;
+
+    console.log('[PeerJS] Connecting to target peer:', targetPeerId);
+    setConnectionStatus('connecting');
+
+    const stream = await initMicrophone();
+
+    // Establish Data Connection
+    const conn = peerRef.current.connect(targetPeerId, {
+      metadata: { name: deviceName, channel },
+    });
+    setupDataConnection(conn);
+
+    // Establish Media Call
+    if (stream) {
+      const call = peerRef.current.call(targetPeerId, stream);
+      setupMediaCall(call);
+    }
+  }, [peerId, deviceName, channel, initMicrophone, setupDataConnection, setupMediaCall]);
+
+  // Initialize PeerJS client
+  useEffect(() => {
+    setConnectionStatus('connecting');
+
+    const peer = new Peer(peerId, {
+      debug: 1,
+      config: STUN_SERVERS,
+    });
+    peerRef.current = peer;
+
+    peer.on('open', (id) => {
+      console.log('[PeerJS] Connected to signaling broker with ID:', id);
+      setConnectionStatus('connected');
+
+      // Check if URL query contains target peer ID to auto connect after QR code scan
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetPeer = urlParams.get('peer');
+      if (targetPeer && targetPeer !== id) {
+        connectToPeer(targetPeer);
+      }
+    });
+
+    // Handle incoming Data Connections
+    peer.on('connection', (conn) => {
+      console.log('[PeerJS] Incoming connection from:', conn.peer);
+      setupDataConnection(conn);
+    });
+
+    // Handle incoming Media Calls
+    peer.on('call', async (call) => {
+      console.log('[PeerJS] Incoming call from:', call.peer);
+      let stream = localStreamRef.current;
+      if (!stream) {
+        stream = await initMicrophone();
+      }
+
+      if (stream) {
+        call.answer(stream);
+      } else {
+        // Answer without local mic if not granted yet
+        call.answer();
+      }
+      setupMediaCall(call);
+    });
+
+    peer.on('error', (err) => {
+      console.warn('[PeerJS] Peer error:', err.type, err.message);
+      setConnectionStatus('connected');
+    });
+
+    peer.on('disconnected', () => {
+      console.log('[PeerJS] Peer disconnected, reconnecting...');
+      if (!peer.destroyed) {
+        peer.reconnect();
+      }
+    });
+
+    return () => {
+      if (dataConnRef.current) dataConnRef.current.close();
+      if (mediaConnRef.current) mediaConnRef.current.close();
+      peer.destroy();
+    };
+  }, [peerId, connectToPeer, initMicrophone, setupDataConnection, setupMediaCall]);
+
+  // Channel switch & manual peer pairing handler
+  const changeChannel = useCallback((newChannel: string, targetPeerId?: string) => {
     audioEngine.playKnobClick();
     if (navigator.vibrate) navigator.vibrate(15);
     setChannel(newChannel);
-  }, [channel]);
 
-  // Start Transmitting (Push To Talk - PTT pressed)
+    if (targetPeerId) {
+      connectToPeer(targetPeerId);
+    }
+  }, [connectToPeer]);
+
+  // Start Transmitting (PTT pressed)
   const startTalking = useCallback(async () => {
     if (isTransmittingRef.current) return;
     isTransmittingRef.current = true;
     setIsTransmitting(true);
 
-    // Haptic feedback for tactile feel
-    if (navigator.vibrate) {
-      navigator.vibrate(25);
-    }
-
-    // Local radio squelch chirp
+    if (navigator.vibrate) navigator.vibrate(25);
     audioEngine.playPttStart();
 
-    // Ensure mic is active
     let stream = localStreamRef.current;
     if (!stream) {
       stream = await initMicrophone();
     }
 
     if (stream) {
-      // Unmute audio track for instantaneous WebRTC transmission
-      stream.getAudioTracks().forEach(track => {
+      stream.getAudioTracks().forEach((track) => {
         track.enabled = true;
       });
-
-      // Also set up fallback audio chunk recorder in case WebRTC NAT is blocked
-      try {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-          const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-          mediaRecorderRef.current = recorder;
-          recorder.ondataavailable = async (e) => {
-            if (e.data.size > 0 && !isP2PDirect && wsRef.current?.readyState === WebSocket.OPEN) {
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                wsRef.current?.send(
-                  JSON.stringify({
-                    type: 'audio-relay',
-                    audioData: reader.result,
-                  })
-                );
-              };
-              reader.readAsDataURL(e.data);
-            }
-          };
-          recorder.start(150);
-        }
-      } catch (err) {
-        console.warn('Fallback MediaRecorder error:', err);
-      }
     }
 
-    // Notify peer via WebSocket
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'ptt-start',
-        })
-      );
+    // Send PTT start signal to peer
+    if (dataConnRef.current && dataConnRef.current.open) {
+      dataConnRef.current.send({ type: 'ptt-start' });
     }
-  }, [initMicrophone, isP2PDirect]);
+  }, [initMicrophone]);
 
   // Stop Transmitting (PTT released)
   const stopTalking = useCallback(() => {
@@ -460,57 +378,30 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
 
     // Mute mic track immediately
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = false;
       });
     }
 
-    // Stop fallback recorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-
-    // Play classic Roger Beep!
     audioEngine.playRogerBeep();
+    if (navigator.vibrate) navigator.vibrate([15, 30, 15]);
 
-    // Haptic confirmation
-    if (navigator.vibrate) {
-      navigator.vibrate([15, 30, 15]);
-    }
-
-    // Notify peer via WebSocket
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'ptt-end',
-        })
-      );
+    // Send PTT end signal to peer
+    if (dataConnRef.current && dataConnRef.current.open) {
+      dataConnRef.current.send({ type: 'ptt-end' });
     }
   }, []);
 
-  // Send Call Siren / Alert to the partner phone
+  // Send Call Siren / Alert
   const sendCallTone = useCallback(() => {
     audioEngine.playCallAlert();
-    if (navigator.vibrate) {
-      navigator.vibrate([50, 50, 50]);
-    }
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'ptt-start',
-        })
-      );
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'call-alert',
-        })
-      );
+    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+
+    if (dataConnRef.current && dataConnRef.current.open) {
+      dataConnRef.current.send({ type: 'ptt-start' });
+      dataConnRef.current.send({ type: 'call-alert' });
       setTimeout(() => {
-        wsRef.current?.send(JSON.stringify({ type: 'ptt-end' }));
+        dataConnRef.current?.send({ type: 'ptt-end' });
       }, 1500);
     }
   }, []);
@@ -543,7 +434,15 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     const clean = name.trim().slice(0, 16) || 'Smartfon';
     setDeviceName(clean);
     localStorage.setItem('wt_device_name', clean);
-  }, []);
+
+    if (dataConnRef.current && dataConnRef.current.open) {
+      dataConnRef.current.send({
+        type: 'peer-info',
+        peerId,
+        name: clean,
+      });
+    }
+  }, [peerId]);
 
   return {
     channel,

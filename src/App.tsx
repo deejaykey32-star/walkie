@@ -34,6 +34,7 @@ export default function App() {
   const {
     channel,
     channels,
+    peerId,
     deviceName,
     connectionStatus,
     isP2PDirect,
@@ -648,8 +649,9 @@ export default function App() {
         isOpen={isPairingOpen}
         onClose={() => setIsPairingOpen(false)}
         channel={channel}
-        onChannelSelect={(ch) => {
-          changeChannel(ch);
+        peerId={peerId}
+        onChannelSelect={(ch, targetPeerId) => {
+          changeChannel(ch, targetPeerId);
           setIsPairingOpen(false);
         }}
         deviceName={deviceName}

@@ -22,8 +22,9 @@ interface PairingModalProps {
   channel: string;
   isOpen: boolean;
   onClose: () => void;
-  onChannelSelect: (ch: string) => void;
+  onChannelSelect: (ch: string, targetPeerId?: string) => void;
   deviceName: string;
+  peerId?: string;
 }
 
 export const PairingModal: React.FC<PairingModalProps> = ({
@@ -32,6 +33,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   onClose,
   onChannelSelect,
   deviceName,
+  peerId,
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
@@ -44,10 +46,12 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Generate shareable URL
+  // Generate shareable URL with embedded Peer ID for 1-scan P2P connection
   const shareUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}?ch=${encodeURIComponent(channel)}`
+      ? `${window.location.origin}${window.location.pathname}?ch=${encodeURIComponent(channel)}${
+          peerId ? `&peer=${encodeURIComponent(peerId)}` : ''
+        }`
       : '';
 
   useEffect(() => {
@@ -227,8 +231,9 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     try {
       const parsed = new URL(url);
       const ch = parsed.searchParams.get('ch') || parsed.searchParams.get('channel');
+      const targetPeer = parsed.searchParams.get('peer');
       if (ch) {
-        onChannelSelect(ch);
+        onChannelSelect(ch, targetPeer || undefined);
         stopCameraStream();
         onClose();
       }

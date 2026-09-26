@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, CheckCircle, ArrowDownCircle, Info, Sparkles } from 'lucide-react';
+import { Download, CheckCircle, ArrowDownCircle, Info, Smartphone } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { useAppPlatform } from '../hooks/useAppPlatform';
 
@@ -30,24 +30,26 @@ export const PWAInstallButton: React.FC = () => {
     }
   };
 
-  // Direct 1-click APK Download (NO modal frames!)
+  // Direct 1-click APK Download (Forces browser download without opening frames!)
   const handleDownloadDirectAPK = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (isNative) {
+      showToast('Korzystasz już z natywnej aplikacji Android APK!');
+      return;
+    }
+
     setDownloadingAPK(true);
 
-    const link = document.createElement('a');
-    link.href = '/walkie-talkie-p2p.apk';
-    link.download = 'WalkieTalkie-P2P-Android.apk';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Direct window location trigger forces mobile browsers to download file directly
+    window.location.href = '/walkie-talkie-p2p.apk';
 
-    showToast('Pobieranie pliku instalacyjnego Android APK...');
+    showToast('Rozpoczęto pobieranie pliku instalacyjnego Android APK...');
 
     setTimeout(() => {
       setDownloadingAPK(false);
-    }, 2000);
+    }, 2500);
   };
 
   const showToast = (msg: string) => {
@@ -59,41 +61,43 @@ export const PWAInstallButton: React.FC = () => {
 
   return (
     <div className="relative flex items-center gap-2 flex-wrap">
-      {/* Direct APK Download Button */}
-      <button
-        onClick={handleDownloadDirectAPK}
-        disabled={downloadingAPK}
-        className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-md shadow-emerald-900/30 hover:brightness-110 active:scale-95 transition disabled:opacity-50"
-        title="Pobierz plik instalacyjny APK bezpośrednio dla smartfona z systemem Android"
-      >
-        <ArrowDownCircle className="w-3.5 h-3.5 text-emerald-200" />
-        <span>{downloadingAPK ? 'Pobieranie...' : 'Pobierz APK'}</span>
-      </button>
-
-      {/* Direct PWA Install Button */}
-      {isInstalled || isPWA ? (
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/40 rounded-full text-xs font-semibold text-emerald-400">
+      {/* If ALREADY running inside Native Android APK container, show native installed badge */}
+      {isNative ? (
+        <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/90 border border-emerald-500/50 rounded-full text-xs font-bold text-emerald-400 shadow-sm">
           <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-          <span>PWA ZAINSTALOWANO</span>
+          <span>APK ZAINSTALOWANO (NATYWNY ANDROID)</span>
         </div>
       ) : (
-        <button
-          onClick={handleInstallPWA}
-          className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-slate-950 shadow-md shadow-amber-900/30 hover:brightness-110 active:scale-95 transition"
-          title="Zainstaluj aplikację bezpośrednio na urządzeniu z przeglądarki"
-        >
-          <Download className="w-3.5 h-3.5 text-slate-950" />
-          <span>Zainstaluj PWA</span>
-        </button>
-      )}
+        <>
+          {/* Direct APK Download Button (Visible on Web / PWA) */}
+          <button
+            onClick={handleDownloadDirectAPK}
+            disabled={downloadingAPK}
+            className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-md shadow-emerald-900/30 hover:brightness-110 active:scale-95 transition disabled:opacity-50"
+            title="Pobierz plik instalacyjny APK bezpośrednio dla smartfona z systemem Android"
+          >
+            <ArrowDownCircle className="w-3.5 h-3.5 text-emerald-200" />
+            <span>{downloadingAPK ? 'Pobieranie...' : 'Pobierz APK'}</span>
+          </button>
 
-      {/* Active Mode Pill Indicator (Informational only, no popup modal frame!) */}
-      <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/80 border border-slate-700 rounded-full text-[11px] font-mono text-slate-300">
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-        <span>
-          {isNative ? 'Tryb Natywny Android' : isPWA ? 'Tryb PWA' : 'Tryb Webowy'}
-        </span>
-      </div>
+          {/* Direct PWA Install Button */}
+          {isInstalled || isPWA ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/40 rounded-full text-xs font-semibold text-emerald-400">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+              <span>PWA ZAINSTALOWANO</span>
+            </div>
+          ) : (
+            <button
+              onClick={handleInstallPWA}
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-slate-950 shadow-md shadow-amber-900/30 hover:brightness-110 active:scale-95 transition"
+              title="Zainstaluj aplikację bezpośrednio na urządzeniu z przeglądarki"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-950" />
+              <span>Zainstaluj PWA</span>
+            </button>
+          )}
+        </>
+      )}
 
       {/* Direct Toast Hint Notification (No Frame Modal!) */}
       {toastMessage && (

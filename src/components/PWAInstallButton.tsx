@@ -42,8 +42,14 @@ export const PWAInstallButton: React.FC = () => {
 
     setDownloadingAPK(true);
 
-    // Direct window location trigger forces mobile browsers to download file directly
-    window.location.href = '/walkie-talkie-p2p.apk';
+    const apkUrl = `${window.location.origin}/walkie-talkie-p2p.apk`;
+    const link = document.createElement('a');
+    link.href = apkUrl;
+    link.setAttribute('download', 'walkie-talkie-p2p.apk');
+    link.setAttribute('target', '_blank');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 
     showToast('Rozpoczęto pobieranie pliku instalacyjnego Android APK...');
 

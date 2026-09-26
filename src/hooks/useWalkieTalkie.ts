@@ -232,12 +232,19 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
         const msg = typeof data === 'string' ? JSON.parse(data) : (data as Record<string, unknown>);
         switch (msg.type) {
           case 'peer-info':
-            if (msg.peerId !== peerId) {
+            if (msg.peerId && msg.peerId !== peerId) {
+              const remoteId = msg.peerId as string;
               setRemotePeer({
-                peerId: (msg.peerId as string) || conn.peer,
+                peerId: remoteId,
                 name: (msg.name as string) || 'Partner-Radio',
               });
               setConnectionStatus('paired');
+              setIsP2PDirect(true);
+
+              // Reciprocate connection if media connection is not active yet
+              if (!mediaConnRef.current || !mediaConnRef.current.open) {
+                connectToPeer(remoteId);
+              }
             }
             break;
 
@@ -528,20 +535,42 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       setupDataConnection(conn);
     });
 
-    peer.on('call', async (call) => {
+    peer.on('call', (call) => {
       if (call.peer === peerId) return; // Prevent self call
       console.log('[PeerJS] Incoming media call from remote peer:', call.peer);
-      let stream = localStreamRef.current;
-      if (!stream) {
-        stream = await initMicrophone();
+
+      const activeStream = localStreamRef.current;
+      try {
+        if (activeStream && activeStream.active) {
+          call.answer(activeStream);
+        } else {
+          call.answer();
+        }
+      } catch (e) {
+        console.warn('Error in call.answer:', e);
+        try {
+          call.answer();
+        } catch (err) {}
       }
 
-      if (stream) {
-        call.answer(stream);
-      } else {
-        call.answer();
-      }
       setupMediaCall(call);
+
+      if (!activeStream || !activeStream.active) {
+        initMicrophone().then((str) => {
+          if (str && call.peerConnection) {
+            try {
+              const senders = call.peerConnection.getSenders();
+              const audioTrack = str.getAudioTracks()[0];
+              const sender = senders.find((s) => s.track?.kind === 'audio');
+              if (sender && audioTrack) {
+                sender.replaceTrack(audioTrack);
+              }
+            } catch (err) {
+              console.warn('replaceTrack error:', err);
+            }
+          }
+        });
+      }
     });
 
     peer.on('error', (err) => {

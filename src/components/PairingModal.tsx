@@ -440,34 +440,61 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           </div>
         )}
 
-        {/* Tab 3: Manual Channel input */}
+        {/* Tab 3: Manual Channel input & Available Channels List */}
         {activeTab === 'manual' && (
-          <form onSubmit={handleManualSubmit} className="space-y-4">
+          <div className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                Wpisz Kod Dostępu / Kanał:
+              <label className="block text-xs font-bold text-amber-400 uppercase tracking-wider mb-2">
+                Dostępne Kanały PMR (1-Tap):
               </label>
-              <input
-                type="text"
-                value={customChannelInput}
-                onChange={(e) => setCustomChannelInput(e.target.value)}
-                placeholder="np. CH-1, ALFA, 7721..."
-                className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2.5 text-sm font-mono text-amber-400 uppercase placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
-                autoFocus
-              />
-              <p className="text-[11px] text-slate-500 mt-1">
-                Wpisz ten sam kod na obu telefonach, aby natychmiast rozmawiać przez radio P2P.
-              </p>
+              <div className="grid grid-cols-4 gap-1.5 mb-3">
+                {['CH-01', 'CH-02', 'CH-03', 'CH-04', 'CH-05', 'CH-06', 'CH-07', 'CH-08'].map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => {
+                      onChannelSelect(ch);
+                      stopCameraStream();
+                      onClose();
+                    }}
+                    className={`py-2 px-1 rounded-xl text-center text-xs font-mono font-black transition active:scale-95 border ${
+                      ch === channel
+                        ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md'
+                        : 'bg-slate-950 text-slate-200 border-slate-700/80 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {ch}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold uppercase tracking-wider transition active:scale-95"
-            >
-              <span>Dołącz do Kanału</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
+            <form onSubmit={handleManualSubmit} className="space-y-3 pt-2 border-t border-slate-800">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Lub Wpisz Własny Kod Dostępu:
+                </label>
+                <input
+                  type="text"
+                  value={customChannelInput}
+                  onChange={(e) => setCustomChannelInput(e.target.value)}
+                  placeholder="np. ALFA, PATROL, 7721..."
+                  className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2.5 text-sm font-mono text-amber-400 uppercase placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Wpisz ten sam kod na obu telefonach, aby rozmawiać P2P.
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold uppercase tracking-wider transition active:scale-95"
+              >
+                <span>Dołącz do Kanału</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
         )}
       </div>
     </div>

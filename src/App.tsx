@@ -344,6 +344,40 @@ export default function App() {
           />
         </div>
 
+        {/* PROMINENT AVAILABLE CHANNELS BAR (1-TAP) */}
+        <div className="mb-3 p-2.5 rounded-2xl bg-black/50 border border-slate-800 flex flex-col gap-1.5">
+          <div className="flex items-center justify-between text-[10px] font-black uppercase text-amber-400 px-1">
+            <span className="flex items-center gap-1.5">
+              <Radio className="w-3.5 h-3.5 text-amber-400" />
+              DOSTĘPNE KANAŁY RADIOWE (1-TAP):
+            </span>
+            <button
+              onClick={() => setShowChannelPicker(true)}
+              className="text-amber-400 hover:text-amber-300 underline font-semibold text-[10px]"
+            >
+              Więcej »
+            </button>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {CHANNELS.map((ch) => {
+              const isActive = ch.id === channel;
+              return (
+                <button
+                  key={ch.id}
+                  onClick={() => changeChannel(ch.id)}
+                  className={`py-1.5 px-1 rounded-xl text-center text-xs font-mono font-black transition active:scale-95 border ${
+                    isActive
+                      ? 'bg-amber-500 text-slate-950 font-black border-amber-300 shadow-md shadow-amber-950/60'
+                      : 'bg-slate-900/90 text-slate-200 border-slate-700/70 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  {ch.id}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Microphone Permission Warning Banner */}
         {micAllowed === false && (
           <div className="mb-3 p-2.5 rounded-xl bg-red-950/80 border border-red-500/50 text-[11px] text-red-200 flex items-center justify-between">

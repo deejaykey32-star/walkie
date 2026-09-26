@@ -53,14 +53,26 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
   const [volume, setVolume] = useState(85); // 0 to 100
   const [squelch, setSquelch] = useState(50); // 0 to 100
 
+  // State refs to prevent unnecessary useEffect re-runs
+  const channelRef = useRef(channel);
+  useEffect(() => {
+    channelRef.current = channel;
+  }, [channel]);
+
+  const deviceNameRef = useRef(deviceName);
+  useEffect(() => {
+    deviceNameRef.current = deviceName;
+  }, [deviceName]);
+
   const peerRef = useRef<Peer | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
   const mediaConnRef = useRef<MediaConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const isTransmittingRef = useRef(false);
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
-  // Audio element setup
+  // Hidden audio element for WebRTC remote sound
   useEffect(() => {
     const audio = new Audio();
     audio.autoplay = true;
@@ -79,6 +91,20 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       remoteAudioRef.current.volume = volume / 100;
     }
   }, [volume]);
+
+  // Read URL query parameter for instant channel pairing
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const chParam = urlParams.get('ch') || urlParams.get('channel');
+    if (chParam) {
+      const match = CHANNELS.find((c) => c.id.toLowerCase() === chParam.toLowerCase() || c.name.toLowerCase() === chParam.toLowerCase());
+      if (match) {
+        setChannel(match.id);
+      } else {
+        setChannel(chParam.toUpperCase());
+      }
+    }
+  }, []);
 
   // Microphone initialization
   const initMicrophone = useCallback(async () => {
@@ -125,7 +151,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
 
   // Auto initialize mic & audio context on user interaction
   useEffect(() => {
-    // Attempt init on mount
     initMicrophone();
 
     const unlockAudio = () => {
@@ -158,11 +183,11 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       setIsP2PDirect(true);
       setConnectionStatus('paired');
 
-      // Send local device name
       conn.send({
         type: 'peer-info',
         peerId,
-        name: deviceName,
+        name: deviceNameRef.current,
+        channel: channelRef.current,
       });
     });
 
@@ -219,7 +244,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     conn.on('error', (err) => {
       console.warn('[PeerJS] Data connection error:', err);
     });
-  }, [peerId, deviceName]);
+  }, [peerId]);
 
   // Bind Media Call events
   const setupMediaCall = useCallback((call: MediaConnection) => {
@@ -256,20 +281,49 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
 
     const stream = await initMicrophone();
 
-    // Establish Data Connection
     const conn = peerRef.current.connect(targetPeerId, {
-      metadata: { name: deviceName, channel },
+      metadata: { name: deviceNameRef.current, channel: channelRef.current },
     });
     setupDataConnection(conn);
 
-    // Establish Media Call
     if (stream) {
       const call = peerRef.current.call(targetPeerId, stream);
       setupMediaCall(call);
     }
-  }, [peerId, deviceName, channel, initMicrophone, setupDataConnection, setupMediaCall]);
+  }, [peerId, initMicrophone, setupDataConnection, setupMediaCall]);
 
-  // Initialize PeerJS client
+  // Setup BroadcastChannel for local cross-tab / local network pairing
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      const bc = new BroadcastChannel('walkie_talkie_p2p_channel');
+      broadcastChannelRef.current = bc;
+
+      bc.onmessage = (event) => {
+        const data = event.data;
+        if (data && data.type === 'announce-presence') {
+          if (data.channel === channelRef.current && data.peerId !== peerId) {
+            connectToPeer(data.peerId);
+          }
+        }
+      };
+
+      // Announce presence
+      bc.postMessage({
+        type: 'announce-presence',
+        peerId,
+        channel: channelRef.current,
+        name: deviceNameRef.current,
+      });
+    }
+
+    return () => {
+      if (broadcastChannelRef.current) {
+        broadcastChannelRef.current.close();
+      }
+    };
+  }, [peerId, connectToPeer]);
+
+  // Main PeerJS Initialization Effect (Runs ONLY ONCE per peerId)
   useEffect(() => {
     setConnectionStatus('connecting');
 
@@ -291,15 +345,13 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       }
     });
 
-    // Handle incoming Data Connections
     peer.on('connection', (conn) => {
-      console.log('[PeerJS] Incoming connection from:', conn.peer);
+      console.log('[PeerJS] Incoming data connection from:', conn.peer);
       setupDataConnection(conn);
     });
 
-    // Handle incoming Media Calls
     peer.on('call', async (call) => {
-      console.log('[PeerJS] Incoming call from:', call.peer);
+      console.log('[PeerJS] Incoming media call from:', call.peer);
       let stream = localStreamRef.current;
       if (!stream) {
         stream = await initMicrophone();
@@ -308,7 +360,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       if (stream) {
         call.answer(stream);
       } else {
-        // Answer without local mic if not granted yet
         call.answer();
       }
       setupMediaCall(call);
@@ -331,7 +382,7 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       if (mediaConnRef.current) mediaConnRef.current.close();
       peer.destroy();
     };
-  }, [peerId, connectToPeer, initMicrophone, setupDataConnection, setupMediaCall]);
+  }, [peerId]); // Intentionally ONLY peerId so channel switch never destroys PeerJS
 
   // Channel switch & manual peer pairing handler
   const changeChannel = useCallback((newChannel: string, targetPeerId?: string) => {
@@ -339,10 +390,20 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     if (navigator.vibrate) navigator.vibrate(15);
     setChannel(newChannel);
 
+    // Announce new channel presence to local BroadcastChannel
+    if (broadcastChannelRef.current) {
+      broadcastChannelRef.current.postMessage({
+        type: 'announce-presence',
+        peerId,
+        channel: newChannel,
+        name: deviceNameRef.current,
+      });
+    }
+
     if (targetPeerId) {
       connectToPeer(targetPeerId);
     }
-  }, [connectToPeer]);
+  }, [peerId, connectToPeer]);
 
   // Start Transmitting (PTT pressed)
   const startTalking = useCallback(async () => {
@@ -364,7 +425,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       });
     }
 
-    // Send PTT start signal to peer
     if (dataConnRef.current && dataConnRef.current.open) {
       dataConnRef.current.send({ type: 'ptt-start' });
     }
@@ -376,7 +436,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     isTransmittingRef.current = false;
     setIsTransmitting(false);
 
-    // Mute mic track immediately
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = false;
@@ -386,7 +445,6 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     audioEngine.playRogerBeep();
     if (navigator.vibrate) navigator.vibrate([15, 30, 15]);
 
-    // Send PTT end signal to peer
     if (dataConnRef.current && dataConnRef.current.open) {
       dataConnRef.current.send({ type: 'ptt-end' });
     }

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { Capacitor } from '@capacitor/core';
+import { Camera as CapCamera } from '@capacitor/camera';
 import {
   QrCode,
   Share2,
@@ -104,10 +106,28 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   };
 
-  // Request camera permission and start video stream safely on all mobile browsers
+  // Request camera permission and start video stream safely on Native Android APK and Web
   const startCameraStream = async () => {
     setScanError(null);
     setIsScanning(false);
+
+    // 1. If running inside Native Android APK container, explicitly request Native Android Camera Permission via Capacitor Plugin
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const check = await CapCamera.checkPermissions();
+        if (check.camera !== 'granted') {
+          const req = await CapCamera.requestPermissions({ permissions: ['camera'] });
+          if (req.camera !== 'granted') {
+            setScanError(
+              'Zezwolenie na aparat jest wymagane w aplikacji Android. Przyznaj uprawnienie w wyskakującym okienku.'
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Capacitor native camera permission check warning:', e);
+      }
+    }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setScanError(
@@ -118,19 +138,19 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
     let stream: MediaStream | null = null;
     try {
-      // 1. First attempt: Rear environment camera
+      // 2. First attempt: Rear environment camera
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       });
     } catch (err1) {
       console.warn('FacingMode environment failed, trying default camera:', err1);
       try {
-        // 2. Fallback attempt: Any available camera stream
+        // 3. Fallback attempt: Any available camera stream
         stream = await navigator.mediaDevices.getUserMedia({ video: true });
       } catch (err2) {
         console.warn('Camera permission denied or device not found:', err2);
         setScanError(
-          'Przeglądarka zablokowała dostęp do aparatu. Kliknij przycisk poniżej, aby wywołać monit o udzielenie zgody.'
+          'Aplikacja zablokowała dostęp do aparatu. Kliknij przycisk poniżej, aby wywołać monit o udzielenie zgody.'
         );
         return;
       }
@@ -147,7 +167,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         }
       }
 
-      // 3. Initialize BarcodeDetector if available
+      // 4. Initialize BarcodeDetector if available
       let detector: unknown = null;
       if ('BarcodeDetector' in window) {
         try {

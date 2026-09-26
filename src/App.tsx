@@ -65,6 +65,7 @@ export default function App() {
   const [backlightColor, setBacklightColor] = useState<'amber' | 'emerald' | 'cyan'>('amber');
   const [rogerBeepOn, setRogerBeepOn] = useState(true);
   const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [showVolumeModal, setShowVolumeModal] = useState(false);
   const [customChannelInput, setCustomChannelInput] = useState('');
   const [showGuide, setShowGuide] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -284,16 +285,22 @@ export default function App() {
             {/* Volume Knob */}
             <div className="flex flex-col items-center">
               <button
-                onClick={cycleVolume}
-                className="w-10 h-7 rounded-t-md bg-[#252c34] border-2 border-slate-600 shadow-inner flex items-center justify-center hover:brightness-110 active:scale-95 transition"
+                onClick={() => {
+                  cycleVolume();
+                  setShowVolumeModal(true);
+                }}
+                className="w-10 h-7 rounded-t-md bg-[#252c34] border-2 border-slate-600 shadow-inner flex items-center justify-center hover:brightness-110 active:scale-95 transition cursor-pointer"
                 title={`Głośność: ${volume}%`}
               >
                 <div
                   className="w-1.5 h-4 bg-emerald-400 rounded-xs transition-transform"
-                  style={{ transform: `rotate(${(volume / 100) * 180 - 90}deg)` }}
+                  style={{ transform: `rotate(${Math.max(-90, Math.min(90, ((volume || 0) / 100) * 180 - 90))}deg)` }}
                 />
               </button>
-              <span className="text-[9px] font-mono text-slate-400 mt-0.5 uppercase tracking-tighter">
+              <span
+                onClick={() => setShowVolumeModal(true)}
+                className="text-[9px] font-mono text-slate-400 mt-0.5 uppercase tracking-tighter cursor-pointer hover:text-white"
+              >
                 VOL: {volume}%
               </span>
             </div>
@@ -673,6 +680,76 @@ export default function App() {
                 Ustaw
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Volume Control Modal */}
+      {showVolumeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5 shadow-2xl text-slate-100 flex flex-col my-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Volume2 className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-base text-white">Regulacja głośności</h3>
+              </div>
+              <button
+                onClick={() => setShowVolumeModal(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="my-5 flex flex-col items-center gap-4">
+              <div className="text-3xl font-black font-mono text-emerald-400">
+                {volume}%
+              </div>
+
+              {/* Slider */}
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={volume}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setVolume(Math.max(0, Math.min(100, val)));
+                }}
+                className="w-full h-3 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+
+              {/* Quick Preset Buttons */}
+              <div className="grid grid-cols-5 gap-1.5 w-full">
+                {[0, 25, 50, 75, 100].map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => {
+                      setVolume(level);
+                      audioEngine.playKnobClick();
+                    }}
+                    className={`py-2 rounded-xl text-xs font-mono font-bold transition active:scale-95 border ${
+                      volume === level
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-md font-black'
+                        : 'bg-slate-950 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    }`}
+                  >
+                    {level === 0 ? 'WYŁ' : `${level}%`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                audioEngine.playKnobClick();
+                setShowVolumeModal(false);
+              }}
+              className="w-full py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-bold uppercase text-xs hover:bg-emerald-400 transition"
+            >
+              Zatwierdź
+            </button>
           </div>
         </div>
       )}

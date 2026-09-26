@@ -643,6 +643,18 @@ export default function App() {
         </div>
       )}
 
+      {/* Pairing / QR Code Modal */}
+      <PairingModal
+        isOpen={isPairingOpen}
+        onClose={() => setIsPairingOpen(false)}
+        channel={channel}
+        onChannelSelect={(ch) => {
+          changeChannel(ch);
+          setIsPairingOpen(false);
+        }}
+        deviceName={deviceName}
+      />
+
       {/* Offline Status Toast */}
       <OfflineIndicator />
     </div>

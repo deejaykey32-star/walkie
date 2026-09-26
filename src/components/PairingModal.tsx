@@ -1,6 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { QrCode, Share2, Copy, Check, Camera, X, Radio, ArrowRight, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
+import {
+  QrCode,
+  Share2,
+  Copy,
+  Check,
+  Camera,
+  X,
+  Radio,
+  ArrowRight,
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw,
+  Key,
+  Video,
+} from 'lucide-react';
 
 interface PairingModalProps {
   channel: string;
@@ -19,19 +33,20 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [activeTab, setActiveTab] = useState<'qr' | 'scan' | 'manual'>('qr');
   const [customChannelInput, setCustomChannelInput] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
-  const [permissionRequested, setPermissionRequested] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Generate shareable URL
-  const shareUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}${window.location.pathname}?ch=${encodeURIComponent(channel)}`
-    : '';
+  const shareUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname}?ch=${encodeURIComponent(channel)}`
+      : '';
 
   useEffect(() => {
     if (shareUrl) {
@@ -48,14 +63,25 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   }, [shareUrl]);
 
-  // Copy URL to clipboard
-  const handleCopy = async () => {
+  // Copy full URL to clipboard
+  const handleCopyUrl = async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
-      console.warn('Copy failed:', e);
+      console.warn('Copy URL failed:', e);
+    }
+  };
+
+  // Copy channel access code only
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(channel);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch (e) {
+      console.warn('Copy code failed:', e);
     }
   };
 
@@ -65,50 +91,74 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       try {
         await navigator.share({
           title: 'Połącz krótkofalówkę Walkie-Talkie',
-          text: `Połącz się bezpośrednio z moim telefonem (${deviceName}) na kanale ${channel}:`,
+          text: `Kod połączenia z telefonem (${deviceName}): ${channel}\nLink: ${shareUrl}`,
           url: shareUrl,
         });
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
-          handleCopy();
+          handleCopyUrl();
         }
       }
     } else {
-      handleCopy();
+      handleCopyUrl();
     }
   };
 
-  // Request camera permission and start video stream automatically
+  // Request camera permission and start video stream safely on all mobile browsers
   const startCameraStream = async () => {
     setScanError(null);
-    setPermissionRequested(true);
-    setIsScanning(true);
+    setIsScanning(false);
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setScanError(
+        'Brak obsługi aparatu w tym środowisku przeglądarki. Użyj bezpiecznego połączenia HTTPS.'
+      );
+      return;
+    }
+
+    let stream: MediaStream | null = null;
     try {
-      // 1. Check & Prompt Camera Permission via getUserMedia
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
+      // 1. First attempt: Rear environment camera
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
       });
+    } catch (err1) {
+      console.warn('FacingMode environment failed, trying default camera:', err1);
+      try {
+        // 2. Fallback attempt: Any available camera stream
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch (err2) {
+        console.warn('Camera permission denied or device not found:', err2);
+        setScanError(
+          'Przeglądarka zablokowała dostęp do aparatu. Kliknij przycisk poniżej, aby wywołać monit o udzielenie zgody.'
+        );
+        return;
+      }
+    }
 
+    if (stream) {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try {
+          await videoRef.current.play();
+          setIsScanning(true);
+        } catch (e) {
+          console.warn('Video play error:', e);
+        }
       }
 
-      // 2. Initialize BarcodeDetector or Canvas scanning loop
+      // 3. Initialize BarcodeDetector if available
       let detector: unknown = null;
       if ('BarcodeDetector' in window) {
         try {
           // @ts-expect-error - BarcodeDetector browser API
           detector = new window.BarcodeDetector({ formats: ['qr_code'] });
         } catch (e) {
-          console.warn('BarcodeDetector initialization warning:', e);
+          console.warn('BarcodeDetector error:', e);
         }
       }
+
+      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
 
       scanIntervalRef.current = setInterval(async () => {
         if (!videoRef.current || videoRef.current.readyState < 2) return;
@@ -122,20 +172,13 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             }
           }
         } catch {
-          // Frame decode error ignored
+          // Ignore frame decode error
         }
       }, 300);
-    } catch (err) {
-      console.warn('Camera permission denied or error:', err);
-      setIsScanning(false);
-      const errorMsg = (err as Error).name === 'NotAllowedError'
-        ? 'Brak uprawnień. Zezwól na dostęp do aparatu w wyskakującym okienku przeglądarki.'
-        : 'Nie można uzyskać dostępu do aparatu. Upewnij się, że inne aplikacje go nie używają.';
-      setScanError(errorMsg);
     }
   };
 
-  // Clean up camera stream when leaving tab or closing modal
+  // Stop camera stream cleanly
   const stopCameraStream = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
@@ -189,8 +232,8 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-sm rounded-3xl border border-slate-700/80 bg-gradient-to-b from-slate-900 to-slate-950 p-6 shadow-2xl text-slate-100 flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200 overflow-y-auto">
+      <div className="w-full max-w-sm rounded-3xl border border-slate-700/80 bg-gradient-to-b from-slate-900 to-slate-950 p-5 sm:p-6 shadow-2xl text-slate-100 flex flex-col my-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
@@ -198,7 +241,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <QrCode className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-white">Parowanie 2 telefonów</h3>
+              <h3 className="font-bold text-base text-white">Parowanie Walkie-Talkie</h3>
               <p className="text-xs text-amber-400 font-mono">Bieżący kanał: {channel}</p>
             </div>
           </div>
@@ -210,30 +253,52 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           </button>
         </div>
 
+        {/* PROMINENT ACCESS CODE BANNER */}
+        <div className="my-3 p-3 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider block">
+              KOD DOSTĘPU / POŁĄCZENIA:
+            </span>
+            <span className="text-xl font-black font-mono text-white tracking-widest">{channel}</span>
+          </div>
+          <button
+            onClick={handleCopyCode}
+            className="px-3 py-1.5 rounded-xl bg-amber-500 text-slate-950 font-extrabold text-xs hover:bg-amber-400 active:scale-95 transition"
+          >
+            {copiedCode ? 'SKOPIOWANO!' : 'KOPIUJ KOD'}
+          </button>
+        </div>
+
         {/* Tabs */}
-        <div className="flex gap-1.5 p-1 bg-slate-950/80 border border-slate-800 rounded-xl my-4 text-xs font-semibold">
+        <div className="flex gap-1.5 p-1 bg-slate-950/80 border border-slate-800 rounded-xl mb-4 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('qr')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'qr' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'qr'
+                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <QrCode className="w-3.5 h-3.5" />
-            <span>Pokaż QR</span>
+            <span>Kod QR</span>
           </button>
           <button
             onClick={() => setActiveTab('scan')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'scan' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'scan'
+                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Camera className="w-3.5 h-3.5" />
-            <span>Skanuj aparat</span>
+            <span>Aparat</span>
           </button>
           <button
             onClick={() => setActiveTab('manual')}
             className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'manual' ? 'bg-amber-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              activeTab === 'manual'
+                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Radio className="w-3.5 h-3.5" />
@@ -241,36 +306,32 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           </button>
         </div>
 
-        {/* Tab 1: Show QR code */}
+        {/* Tab 1: Show QR code & Access Code */}
         {activeTab === 'qr' && (
           <div className="flex flex-col items-center">
             <div className="p-3 bg-white rounded-2xl shadow-lg border-4 border-amber-500/30">
               {qrDataUrl ? (
-                <img src={qrDataUrl} alt="QR Code Kanału Walkie-Talkie" className="w-48 h-48 rounded-lg" />
+                <img src={qrDataUrl} alt="Kod QR Połączenia" className="w-48 h-48 rounded-lg" />
               ) : (
                 <div className="w-48 h-48 flex items-center justify-center text-slate-900 font-mono text-xs">
-                  Generowanie kodu QR...
+                  Generowanie kodu...
                 </div>
               )}
             </div>
 
             <div className="mt-3 text-center">
               <p className="text-xs text-slate-300 font-medium">
-                Drugi smartfon Android: skieruj aparat lub Google Lens na ten kod!
+                Na drugim telefonie zeskanuj ten kod QR lub wpisz kod <strong className="text-amber-400 font-mono">{channel}</strong>
               </p>
-              <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-emerald-400 font-mono">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Bezpośrednie połączenie P2P WebRTC</span>
-              </div>
             </div>
 
             <div className="w-full grid grid-cols-2 gap-2 mt-4">
               <button
-                onClick={handleCopy}
+                onClick={handleCopyUrl}
                 className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-semibold text-white transition active:scale-95"
               >
                 {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-400" />}
-                <span>{copied ? 'Skopiowano!' : 'Kopiuj link'}</span>
+                <span>{copied ? 'Skopiowano!' : 'Kopiuj Link'}</span>
               </button>
 
               <button
@@ -284,34 +345,48 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           </div>
         )}
 
-        {/* Tab 2: Camera Scanner */}
+        {/* Tab 2: Camera Scanner with direct user gesture prompt button */}
         {activeTab === 'scan' && (
           <div className="flex flex-col items-center">
-            <div className="relative w-full aspect-square max-h-56 rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 flex items-center justify-center">
+            <div className="relative w-full aspect-square max-h-52 rounded-2xl overflow-hidden bg-black border-2 border-amber-500/50 flex flex-col items-center justify-center">
               <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-              {/* Target sight box */}
-              {isScanning && (
-                <div className="absolute inset-8 border-2 border-dashed border-amber-400/80 rounded-xl pointer-events-none animate-pulse" />
+
+              {/* Target sight box when active */}
+              {isScanning ? (
+                <div className="absolute inset-6 border-2 border-dashed border-amber-400/80 rounded-xl pointer-events-none animate-pulse flex items-center justify-center">
+                  <span className="text-[10px] text-amber-300 font-mono bg-black/60 px-2 py-0.5 rounded">
+                    Skanowanie QR...
+                  </span>
+                </div>
+              ) : (
+                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-4 text-center">
+                  <Video className="w-8 h-8 text-amber-400 mb-2 animate-bounce" />
+                  <p className="text-xs text-slate-200 font-semibold mb-3">
+                    Włącz aparat, aby zeskanować kod QR drugiego telefonu
+                  </p>
+                  <button
+                    onClick={startCameraStream}
+                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 text-xs font-black uppercase tracking-wider shadow-lg hover:brightness-110 active:scale-95 transition"
+                  >
+                    Włącz Aparat i Zezwól na Dostęp
+                  </button>
+                </div>
               )}
             </div>
 
-            {scanError ? (
+            {scanError && (
               <div className="mt-3 text-center space-y-2">
-                <p className="text-xs text-amber-300 bg-amber-950/40 border border-amber-500/30 p-2.5 rounded-xl">
+                <p className="text-xs text-amber-300 bg-amber-950/60 border border-amber-500/40 p-2.5 rounded-xl">
                   {scanError}
                 </p>
                 <button
                   onClick={startCameraStream}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold uppercase transition active:scale-95"
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-amber-500 text-slate-950 text-xs font-bold uppercase transition active:scale-95"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Udziel uprawnień do aparatu</span>
+                  <span>Ponów Zapytanie o Dostęp do Aparatu</span>
                 </button>
               </div>
-            ) : (
-              <p className="mt-3 text-xs text-slate-300 text-center">
-                Skieruj obiektyw na kod QR drugiego telefonu. Uprawnienie do aparatu zostanie przyznane automatycznie.
-              </p>
             )}
           </div>
         )}
@@ -321,18 +396,18 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           <form onSubmit={handleManualSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                Wpisz nazwę kanału lub kod pokoju:
+                Wpisz Kod Dostępu / Kanał:
               </label>
               <input
                 type="text"
                 value={customChannelInput}
                 onChange={(e) => setCustomChannelInput(e.target.value)}
-                placeholder="np. CH-01, ALFA, 7721..."
-                className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2.5 text-sm font-mono text-amber-400 placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
+                placeholder="np. CH-1, ALFA, 7721..."
+                className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2.5 text-sm font-mono text-amber-400 uppercase placeholder:text-slate-600 focus:outline-hidden focus:border-amber-500"
                 autoFocus
               />
               <p className="text-[11px] text-slate-500 mt-1">
-                Wpisz ten sam kod na obu telefonach, aby natychmiast nawiązać bezpośrednią łączność radiową.
+                Wpisz ten sam kod na obu telefonach, aby natychmiast rozmawiać przez radio P2P.
               </p>
             </div>
 
@@ -340,7 +415,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               type="submit"
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold uppercase tracking-wider transition active:scale-95"
             >
-              <span>Dołącz do kanału</span>
+              <span>Dołącz do Kanału</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

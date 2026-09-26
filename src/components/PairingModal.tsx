@@ -46,13 +46,18 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Determine base public URL for QR code generation (avoids localhost inside native APK container)
+  const baseUrl =
+    typeof window !== 'undefined' &&
+    !window.location.origin.includes('localhost') &&
+    !window.location.origin.includes('capacitor://')
+      ? window.location.origin
+      : 'https://walkie-talkie-p2p.pages.dev';
+
   // Generate shareable URL with embedded Peer ID for 1-scan P2P connection
-  const shareUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}?ch=${encodeURIComponent(channel)}${
-          peerId ? `&peer=${encodeURIComponent(peerId)}` : ''
-        }`
-      : '';
+  const shareUrl = `${baseUrl}/?ch=${encodeURIComponent(channel)}${
+    peerId ? `&peer=${encodeURIComponent(peerId)}` : ''
+  }`;
 
   useEffect(() => {
     if (shareUrl) {

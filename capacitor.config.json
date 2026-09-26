@@ -1,0 +1,9 @@
+{
+  "appId": "com.walkietalkie.p2p",
+  "appName": "WalkieTalkie P2P Mobile",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}

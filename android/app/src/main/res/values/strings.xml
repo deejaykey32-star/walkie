@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">WalkieTalkie P2P Mobile</string>
+    <string name="title_activity_main">WalkieTalkie P2P Mobile</string>
+    <string name="package_name">com.walkietalkie.p2p</string>
+    <string name="custom_url_scheme">com.walkietalkie.p2p</string>
+</resources>

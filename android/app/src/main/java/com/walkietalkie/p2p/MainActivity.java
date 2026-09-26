@@ -20,38 +20,51 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Ensure Android WebView delegates camera & microphone permissions directly to Android OS Native prompt
-        this.bridge.getWebView().setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                runOnUiThread(() -> {
-                    List<String> neededPermissions = new ArrayList<>();
-                    for (String resource : request.getResources()) {
-                        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                                neededPermissions.add(Manifest.permission.RECORD_AUDIO);
-                            }
-                        }
-                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
-                            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                                neededPermissions.add(Manifest.permission.CAMERA);
-                            }
-                        }
-                    }
+        // Auto grant audio & video capture permissions to WebView if Android OS permissions are granted
+        if (this.bridge != null && this.bridge.getWebView() != null) {
+            this.bridge.getWebView().setWebChromeClient(new WebChromeClient() {
+                @Override
+                public void onPermissionRequest(final PermissionRequest request) {
+                    runOnUiThread(() -> {
+                        String[] resources = request.getResources();
+                        boolean needRecordAudio = false;
+                        boolean needCamera = false;
 
-                    if (!neededPermissions.isEmpty()) {
-                        pendingWebPermissionRequest = request;
-                        ActivityCompat.requestPermissions(
-                            MainActivity.this,
-                            neededPermissions.toArray(new String[0]),
-                            PERMISSION_REQUEST_CODE
-                        );
-                    } else {
-                        request.grant(request.getResources());
-                    }
-                });
-            }
-        });
+                        for (String r : resources) {
+                            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) {
+                                needRecordAudio = true;
+                            }
+                            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) {
+                                needCamera = true;
+                            }
+                        }
+
+                        List<String> permissionsToRequest = new ArrayList<>();
+                        if (needRecordAudio && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                            permissionsToRequest.add(Manifest.permission.RECORD_AUDIO);
+                        }
+                        if (needCamera && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                            permissionsToRequest.add(Manifest.permission.CAMERA);
+                        }
+
+                        if (!permissionsToRequest.isEmpty()) {
+                            pendingWebPermissionRequest = request;
+                            ActivityCompat.requestPermissions(
+                                MainActivity.this,
+                                permissionsToRequest.toArray(new String[0]),
+                                PERMISSION_REQUEST_CODE
+                            );
+                        } else {
+                            try {
+                                request.grant(resources);
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    });
+                }
+            });
+        }
 
         requestNativePermissionsOnStartup();
     }
@@ -81,8 +94,19 @@ public class MainActivity extends BridgeActivity {
                 final PermissionRequest req = pendingWebPermissionRequest;
                 pendingWebPermissionRequest = null;
                 runOnUiThread(() -> {
+                    boolean allGranted = true;
+                    for (int result : grantResults) {
+                        if (result != PackageManager.PERMISSION_GRANTED) {
+                            allGranted = false;
+                            break;
+                        }
+                    }
                     try {
-                        req.grant(req.getResources());
+                        if (allGranted) {
+                            req.grant(req.getResources());
+                        } else {
+                            req.deny();
+                        }
                     } catch (Exception e) {
                         e.printStackTrace();
                     }

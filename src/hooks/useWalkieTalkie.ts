@@ -120,22 +120,36 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     }
   }, []);
 
-  // Microphone initialization
+  // Microphone initialization with fallback for Android device chipsets
   const initMicrophone = useCallback(async () => {
     if (localStreamRef.current && localStreamRef.current.active) {
       setMicAllowed(true);
       return localStreamRef.current;
     }
 
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // 1. Primary attempt with audio processing constraints
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
+    } catch (err1) {
+      console.warn('[Microphone] Advanced audio constraints failed, trying basic audio:', err1);
+      try {
+        // 2. Fallback attempt with plain basic audio
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err2) {
+        console.warn('[Microphone] Permission error or device unavailable:', err2);
+        setMicAllowed(false);
+        return null;
+      }
+    }
 
+    if (stream) {
       // Initially mute track so microphone won't record until user presses PTT
       stream.getAudioTracks().forEach((track) => {
         track.enabled = false;
@@ -156,11 +170,10 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
       }
 
       return stream;
-    } catch (err) {
-      console.warn('[Microphone] Permission error:', err);
-      setMicAllowed(false);
-      return null;
     }
+
+    setMicAllowed(false);
+    return null;
   }, []);
 
   // Auto initialize mic & audio context on user interaction

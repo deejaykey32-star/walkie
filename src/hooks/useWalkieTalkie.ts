@@ -99,10 +99,15 @@ export function useWalkieTalkie(initialChannel = 'CH-01') {
     };
   }, []);
 
-  // Update volume
+  // Update volume safely
   useEffect(() => {
     if (remoteAudioRef.current) {
-      remoteAudioRef.current.volume = volume / 100;
+      try {
+        const safeVol = Math.max(0, Math.min(1, (volume || 0) / 100));
+        remoteAudioRef.current.volume = safeVol;
+      } catch (e) {
+        console.warn('Error setting audio volume:', e);
+      }
     }
   }, [volume]);
 

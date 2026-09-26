@@ -101,6 +101,18 @@ export default function App() {
     audioEngine.playKnobClick();
   };
 
+  // Cycle volume levels safely: 0% -> 25% -> 50% -> 75% -> 100% -> 0%
+  const cycleVolume = () => {
+    setVolume((v) => {
+      if (v >= 100) return 0;
+      if (v < 25) return 25;
+      if (v < 50) return 50;
+      if (v < 75) return 75;
+      return 100;
+    });
+    audioEngine.playKnobClick();
+  };
+
   // Toggle backlight color
   const cycleBacklight = () => {
     const colors: Array<'amber' | 'emerald' | 'cyan'> = ['amber', 'emerald', 'cyan'];
@@ -272,7 +284,7 @@ export default function App() {
             {/* Volume Knob */}
             <div className="flex flex-col items-center">
               <button
-                onClick={() => setVolume((v) => (v >= 100 ? 0 : v + 25))}
+                onClick={cycleVolume}
                 className="w-10 h-7 rounded-t-md bg-[#252c34] border-2 border-slate-600 shadow-inner flex items-center justify-center hover:brightness-110 active:scale-95 transition"
                 title={`Głośność: ${volume}%`}
               >

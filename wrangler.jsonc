@@ -2,6 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "walkie-talkie-p2p",
   "pages_build_output_dir": "./dist",
+  "build": {
+    "command": "npm run build"
+  },
   "assets": {
     "directory": "./dist"
   },

@@ -2,5 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "walkie-talkie-p2p",
   "pages_build_output_dir": "./dist",
+  "assets": {
+    "directory": "./dist"
+  },
   "compatibility_date": "2026-07-15"
 }
